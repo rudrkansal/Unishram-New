@@ -1,0 +1,21 @@
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.idea/
+*.iml
+
+# Firebase config and secrets — never commit these
+lib/firebase_options.dart
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+functions/node_modules/
+.firebase/
+*.keystore
+*.jks
+key.properties
+
+# UIDAI certificate is downloaded per-machine
+assets/certs/uidai_prod.pem
+android/key.properties

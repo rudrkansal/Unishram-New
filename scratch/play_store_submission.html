@@ -1,0 +1,446 @@
+<title>Play Store Submission Kit</title>
+<style>
+  :root{
+    --ink:#1c2a2e;
+    --ink-soft:#4a5a5c;
+    --paper:#f6f3ec;
+    --paper-raised:#ffffff;
+    --line:#dcd5c4;
+    --accent:#1f6f5c;
+    --accent-soft:#e4efe9;
+    --warn:#a15c1f;
+    --warn-soft:#f6ead7;
+    --danger:#a13030;
+    --danger-soft:#f7e2df;
+    --mono-bg:#20302e;
+    --mono-ink:#d9ecd9;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ink:#eae6da;
+      --ink-soft:#b9c4bf;
+      --paper:#161d1e;
+      --paper-raised:#1e2827;
+      --line:#33403d;
+      --accent:#5bbf9f;
+      --accent-soft:#233a34;
+      --warn:#e0a862;
+      --warn-soft:#3a2f1e;
+      --danger:#e08b7f;
+      --danger-soft:#3a2320;
+      --mono-bg:#0f1715;
+      --mono-ink:#bfe3c4;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ink:#eae6da;
+    --ink-soft:#b9c4bf;
+    --paper:#161d1e;
+    --paper-raised:#1e2827;
+    --line:#33403d;
+    --accent:#5bbf9f;
+    --accent-soft:#233a34;
+    --warn:#e0a862;
+    --warn-soft:#3a2f1e;
+    --danger:#e08b7f;
+    --danger-soft:#3a2320;
+    --mono-bg:#0f1715;
+    --mono-ink:#bfe3c4;
+  }
+
+  @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  *{box-sizing:border-box;}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:'IBM Plex Sans', system-ui, sans-serif;
+    padding:0 16px;
+    line-height:1.55;
+  }
+  .wrap{max-width:760px;margin:0 auto;padding-block:36px 80px;}
+
+  h1,h2,h3{font-family:'Source Serif 4', Georgia, serif; text-wrap:balance; margin:0;}
+  h1{font-size:clamp(28px,5vw,38px); font-weight:700; letter-spacing:-0.01em;}
+  h2{font-size:22px; font-weight:600; color:var(--ink);}
+  h3{font-size:16px; font-weight:600;}
+
+  .kicker{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11.5px;
+    letter-spacing:0.12em;
+    text-transform:uppercase;
+    color:var(--accent);
+    font-weight:500;
+  }
+
+  header.top{margin-bottom:8px;}
+  .subtitle{color:var(--ink-soft); font-size:15px; margin-top:10px; max-width:56ch;}
+
+  .meta-row{
+    display:flex; flex-wrap:wrap; gap:10px;
+    margin-top:22px;
+  }
+  .meta-chip{
+    background:var(--paper-raised);
+    border:1px solid var(--line);
+    border-radius:8px;
+    padding:8px 12px;
+    font-size:12.5px;
+    font-family:'IBM Plex Mono', monospace;
+    color:var(--ink-soft);
+  }
+  .meta-chip b{color:var(--ink); font-weight:600;}
+
+  nav.toc{
+    margin-top:28px;
+    border:1px solid var(--line);
+    border-radius:12px;
+    background:var(--paper-raised);
+    padding:16px 18px;
+  }
+  nav.toc .kicker{margin-bottom:8px; display:block;}
+  nav.toc ol{margin:0; padding-left:0; list-style:none; display:grid; gap:6px;}
+  nav.toc a{
+    color:var(--ink); text-decoration:none; font-size:14px;
+    display:flex; gap:8px; align-items:baseline;
+  }
+  nav.toc a:hover{color:var(--accent);}
+  nav.toc .num{
+    font-family:'IBM Plex Mono', monospace; color:var(--accent); font-size:12px; width:18px; flex-shrink:0;
+  }
+
+  section{margin-top:52px; scroll-margin-top:20px;}
+  section .section-head{
+    display:flex; align-items:baseline; gap:12px; margin-bottom:6px;
+  }
+  section .section-num{
+    font-family:'IBM Plex Mono', monospace; color:var(--accent); font-size:14px; font-weight:500;
+  }
+  section > .lede{color:var(--ink-soft); font-size:14.5px; margin-top:8px; max-width:60ch;}
+
+  .card{
+    background:var(--paper-raised);
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:18px 20px;
+    margin-top:16px;
+  }
+  .card + .card{margin-top:12px;}
+  .card h3{margin-bottom:10px;}
+
+  table{width:100%; border-collapse:collapse; font-size:13.5px;}
+  table th{
+    text-align:left; font-family:'IBM Plex Mono', monospace; font-weight:500;
+    font-size:11px; text-transform:uppercase; letter-spacing:0.06em;
+    color:var(--ink-soft); padding:8px 10px; border-bottom:1px solid var(--line);
+  }
+  table td{padding:10px 10px; border-bottom:1px solid var(--line); vertical-align:top;}
+  table tr:last-child td{border-bottom:none;}
+  .tbl-wrap{overflow-x:auto; margin-top:14px;}
+
+  .pill{
+    display:inline-block; padding:2px 9px; border-radius:100px;
+    font-size:11px; font-weight:600; font-family:'IBM Plex Mono', monospace;
+    white-space:nowrap;
+  }
+  .pill.yes{background:var(--accent-soft); color:var(--accent);}
+  .pill.no{background:var(--warn-soft); color:var(--warn);}
+  .pill.watch{background:var(--danger-soft); color:var(--danger);}
+
+  .qa{margin-top:14px;}
+  .qa .q{
+    font-weight:600; font-size:14px; margin-bottom:4px;
+    display:flex; gap:8px; align-items:baseline; justify-content:space-between;
+  }
+  .qa .a{
+    font-size:14px; color:var(--ink);
+    background:var(--accent-soft);
+    border-left:3px solid var(--accent);
+    padding:9px 12px;
+    border-radius:0 6px 6px 0;
+  }
+  .qa .a.copyable{position:relative;}
+
+  .copybtn{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:10.5px; text-transform:uppercase; letter-spacing:0.05em;
+    background:var(--paper-raised); border:1px solid var(--line); color:var(--ink-soft);
+    border-radius:6px; padding:3px 8px; cursor:pointer;
+    flex-shrink:0;
+  }
+  .copybtn:hover{border-color:var(--accent); color:var(--accent);}
+  .copybtn.copied{color:var(--accent); border-color:var(--accent);}
+
+  .code-block{
+    background:var(--mono-bg); color:var(--mono-ink);
+    font-family:'IBM Plex Mono', monospace; font-size:12.5px;
+    border-radius:8px; padding:14px 16px; margin-top:10px;
+    white-space:pre-wrap; line-height:1.6; position:relative;
+  }
+  .code-block .copybtn{position:absolute; top:10px; right:10px; background:rgba(255,255,255,0.08); border-color:rgba(255,255,255,0.2); color:var(--mono-ink);}
+
+  .note{
+    display:flex; gap:10px; align-items:flex-start;
+    background:var(--warn-soft); border:1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+    border-radius:10px; padding:12px 14px; margin-top:14px; font-size:13.5px;
+  }
+  .note b{color:var(--warn);}
+  .note.danger{background:var(--danger-soft); border-color:color-mix(in srgb, var(--danger) 35%, transparent);}
+  .note.danger b{color:var(--danger);}
+
+  ul.checklist{list-style:none; padding:0; margin:14px 0 0; display:grid; gap:9px;}
+  ul.checklist li{
+    display:flex; gap:10px; align-items:flex-start; font-size:14px;
+  }
+  ul.checklist li::before{
+    content:"";
+    width:16px; height:16px; flex-shrink:0; margin-top:2px;
+    border:1.5px solid var(--accent); border-radius:4px;
+    background:var(--paper-raised);
+  }
+
+  footer{
+    margin-top:70px; padding-top:20px; border-top:1px solid var(--line);
+    font-size:12.5px; color:var(--ink-soft);
+  }
+
+  @media (max-width:520px){
+    table, thead, tbody, th, td, tr{display:block;}
+    table thead{display:none;}
+    table tr{border-bottom:1px solid var(--line); padding:10px 0;}
+    table td{border-bottom:none; padding:4px 0;}
+    table td::before{
+      content:attr(data-label);
+      display:block; font-family:'IBM Plex Mono', monospace;
+      font-size:10.5px; text-transform:uppercase; color:var(--ink-soft); margin-bottom:2px;
+    }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="top">
+    <span class="kicker">Google Play Console — Submission Reference</span>
+    <h1>UniShram: Play Store Kit</h1>
+    <p class="subtitle">Ready-to-paste answers for the Data Safety form, the permissions declarations, and everything else Play Console will ask for before this build can go live.</p>
+    <div class="meta-row">
+      <div class="meta-chip">Package: <b>com.labourlink.labour_marketplace</b></div>
+      <div class="meta-chip">Backend: <b>Firebase (Auth, Firestore, Storage, Messaging, Crashlytics, Analytics, Remote Config)</b></div>
+      <div class="meta-chip">Permissions: <b>Location · Camera · Microphone · Internet</b></div>
+    </div>
+    <nav class="toc">
+      <span class="kicker">On this page</span>
+      <ol>
+        <li><a href="#permissions"><span class="num">01</span> Permissions declared & why</li>
+        <li><a href="#sms"><span class="num">02</span> The SMS/OTP question (read first)</li>
+        <li><a href="#data-safety"><span class="num">03</span> Data Safety form — full answer key</li>
+        <li><a href="#privacy-policy"><span class="num">04</span> Privacy policy requirements</li>
+        <li><a href="#checklist"><span class="num">05</span> Pre-submission checklist</li>
+      </ol>
+    </nav>
+  </header>
+
+  <section id="permissions">
+    <div class="section-head">
+      <span class="section-num">01</span>
+      <h2>Permissions declared & why</h2>
+    </div>
+    <p class="lede">Pulled directly from <code>android/app/src/main/AndroidManifest.xml</code>. This is the full list — nothing else is requested.</p>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Permission</th><th>Used for</th><th>Play Console category</th></tr></thead>
+        <tbody>
+          <tr>
+            <td data-label="Permission"><code>ACCESS_FINE_LOCATION</code><br/><code>ACCESS_COARSE_LOCATION</code></td>
+            <td data-label="Used for">Showing nearby jobs to a labourer, resolving a worker's home district, and letting a contractor set a project's site location on the map.</td>
+            <td data-label="Category">Location</td>
+          </tr>
+          <tr>
+            <td data-label="Permission"><code>CAMERA</code></td>
+            <td data-label="Used for">Capturing a profile photo and work-sample photos from within the app.</td>
+            <td data-label="Category">Photos and videos</td>
+          </tr>
+          <tr>
+            <td data-label="Permission"><code>RECORD_AUDIO</code></td>
+            <td data-label="Used for">The optional voice-control feature (speak a command like "post a job" instead of tapping) — accessibility for low-literacy users.</td>
+            <td data-label="Category">Microphone</td>
+          </tr>
+          <tr>
+            <td data-label="Permission"><code>INTERNET</code></td>
+            <td data-label="Used for">Standard network access — no Play Console declaration needed.</td>
+            <td data-label="Category">—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <span>⚠</span>
+      <div><b>Fix before submitting:</b> the manifest has a stale code comment claiming the camera permission is also for "Aadhaar card scanning." I checked — there's no Aadhaar/ID-scanning code anywhere in the app. If Play's reviewers read that comment (they sometimes do during sensitive-permission review), it could raise a question that doesn't need to exist. Worth deleting that phrase from the comment before you build the release you submit.</div>
+    </div>
+
+    <div class="qa">
+      <div class="q">Play Console will ask you to justify CAMERA, RECORD_AUDIO and LOCATION with a short sentence each. Suggested text:<button class="copybtn" data-copy="cam-just">Copy all three</button></div>
+      <div class="a copyable" id="cam-just">CAMERA: Lets users take a profile photo or work-sample photos directly within the app, instead of only choosing from the gallery.
+
+RECORD_AUDIO: Powers an optional voice-command feature so users with low literacy can navigate the app by speaking (e.g. "post a job", "go back") instead of typing.
+
+ACCESS_FINE_LOCATION / ACCESS_COARSE_LOCATION: Shows a labourer jobs near their current location and lets a contractor mark a project's job site on a map. Location is only read while the app is in use — never in the background.</div>
+    </div>
+  </section>
+
+  <section id="sms">
+    <div class="section-head">
+      <span class="section-num">02</span>
+      <h2>The SMS/OTP question — read this first</h2>
+    </div>
+    <p class="lede">You asked me to prepare the "SMS permission justification." Good news: there isn't one to write.</p>
+
+    <div class="card">
+      <h3>Why no SMS permission exists</h3>
+      <p style="margin-top:8px; font-size:14px;">I checked the manifest directly — <code>READ_SMS</code> and <code>RECEIVE_SMS</code> are not declared anywhere. The app authenticates phone numbers through <b>Firebase Phone Auth</b>, which uses Google's permission-less <b>SMS Retriever API</b> to auto-detect the OTP code. Android grants that mechanism access to exactly one incoming SMS matching an app-specific hash, without your app ever holding a general SMS-reading permission.</p>
+      <p style="margin-top:10px; font-size:14px;">This matters because Play Console's <b>Restricted Permissions</b> review (the one that can ask for a justification video and add days to your review) is triggered specifically by declaring <code>READ_SMS</code> / <code>RECEIVE_SMS</code> in the manifest. Since this app doesn't declare them, that entire extra review step does not apply to you.</p>
+    </div>
+
+    <div class="note">
+      <b>One thing to verify yourself:</b> if you ever add a package like <code>sms_autofill</code> or similar later, double-check it doesn't silently add <code>RECEIVE_SMS</code> to the merged manifest — some autofill plugins do. Run <code>flutter build apk --release</code> and check the final merged manifest in <code>build/app/intermediates/merged_manifests/release/AndroidManifest.xml</code> before every submission if you're unsure.</div>
+  </section>
+
+  <section id="data-safety">
+    <div class="section-head">
+      <span class="section-num">03</span>
+      <h2>Data Safety form — full answer key</h2>
+    </div>
+    <p class="lede">Play Console → your app → Policy → App content → Data safety. Answer in this order; each block below maps to one screen in that flow.</p>
+
+    <div class="card">
+      <h3>Does your app collect or share any of the required user data types?</h3>
+      <div class="qa"><div class="a">Yes</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Data types to declare</h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Category</th><th>Data type</th><th>Collected</th><th>Shared</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td data-label="Category">Personal info</td><td data-label="Type">Name</td><td data-label="Collected"><span class="pill yes">Yes</span></td><td data-label="Shared"><span class="pill no">No</span></td><td data-label="Purpose">App functionality, account management</td></tr>
+            <tr><td data-label="Category">Personal info</td><td data-label="Type">Phone number</td><td data-label="Collected"><span class="pill yes">Yes</span></td><td data-label="Shared"><span class="pill no">No</span></td><td data-label="Purpose">Account management (sign-in via OTP)</td></tr>
+            <tr><td data-label="Category">Personal info</td><td data-label="Type">Address (approximate: city/district/state/pincode)</td><td data-label="Collected"><span class="pill yes">Yes</span></td><td data-label="Shared"><span class="pill no">No</span></td><td data-label="Purpose">App functionality (matching jobs to location)</td></tr>
+            <tr><td data-label="Category">Location</td><td data-label="Type">Precise location</td><td data-label="Collected"><span class="pill yes">Yes</span></td><td data-label="Shared"><span class="pill no">No</span></td><td data-label="Purpose">App functionality (nearby jobs / project site)</td></tr>
+            <tr><td data-label="Category">Photos and videos</td><td data-label="Type">Photos</td><td data-label="Collected"><span class="pill yes">Yes</span></td><td data-label="Shared"><span class="pill no">No</span></td><td data-label="Purpose">App functionality (profile & work photos)</td></tr>
+            <tr><td data-label="Category">Messages</td><td data-label="Type">In-app messages</td><td data-label="Collected"><span class="pill yes">Yes</span></td><td data-label="Shared"><span class="pill no">No</span></td><td data-label="Purpose">App functionality (labourer↔contractor chat)</td></tr>
+            <tr><td data-label="Category">App activity</td><td data-label="Type">App interactions</td><td data-label="Collected"><span class="pill yes">Yes</span></td><td data-label="Shared"><span class="pill watch">Yes → Google</span></td><td data-label="Purpose">Analytics (Firebase Analytics)</td></tr>
+            <tr><td data-label="Category">App info and performance</td><td data-label="Type">Crash logs, diagnostics</td><td data-label="Collected"><span class="pill yes">Yes</span></td><td data-label="Shared"><span class="pill watch">Yes → Google</span></td><td data-label="Purpose">Analytics (Firebase Crashlytics)</td></tr>
+            <tr><td data-label="Category">Identifiers</td><td data-label="Type">Device / other IDs (FCM push token)</td><td data-label="Collected"><span class="pill yes">Yes</span></td><td data-label="Shared"><span class="pill no">No</span></td><td data-label="Purpose">App functionality (push notifications)</td></tr>
+            <tr><td data-label="Category">Financial info</td><td data-label="Type">Not collected</td><td data-label="Collected"><span class="pill no">No</span></td><td data-label="Shared">—</td><td data-label="Purpose">Wage figures are text fields users enter, not linked payment data</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note">
+        <span>ℹ</span>
+        <div><b>On "Shared":</b> Firebase Analytics and Crashlytics send data to Google as the service provider running your backend. Play's form has a specific carve-out for this — when you select these SDKs, the form auto-flags them and generally expects "shared" only if the data leaves Firebase for a purpose beyond running the app (e.g. advertising). You're not using Firebase for ads, so when the form asks "is this data shared with a third party," most developers correctly answer <b>No</b> for the core Firebase services, since Google acts as your data processor, not an independent third party. Analytics/Crashlytics still need to be declared as <i>collected</i> either way. If you're unsure, Play Console's in-flow help text next to each SDK explains this — read it at submission time since Google updates this guidance periodically.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Standard follow-up questions</h3>
+      <div class="qa">
+        <div class="q">Is all of the user data collected by your app encrypted in transit?</div>
+        <div class="a">Yes — all traffic goes through Firebase over HTTPS/TLS.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Do you provide a way for users to request that their data be deleted?</div>
+        <div class="a">Yes — the app has an in-app "Delete Account" action (Profile → Delete Account) that removes the user's account.</div>
+      </div>
+      <div class="qa">
+        <div class="q">Is data collection required or optional?</div>
+        <div class="a">Required for name, phone, and role — the app cannot function as a job marketplace without them. Location, photos, and voice control are optional / permission-gated at the OS level.</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="privacy-policy">
+    <div class="section-head">
+      <span class="section-num">04</span>
+      <h2>Privacy policy requirements</h2>
+    </div>
+    <p class="lede">A live, publicly reachable Privacy Policy URL is mandatory before you can submit — Play Console will refuse to publish without one.</p>
+
+    <div class="card">
+      <h3>What it must cover, given what this app actually does</h3>
+      <ul class="checklist">
+        <li>What personal data is collected: name, phone number, location, photos, chat messages, ratings/reviews</li>
+        <li>That phone number is used for OTP sign-in via Firebase Authentication</li>
+        <li>That location is used to show nearby jobs and is not collected in the background</li>
+        <li>That Firebase (Google) is the data processor, and name the specific services used (Auth, Firestore, Storage, Analytics, Crashlytics, Cloud Messaging)</li>
+        <li>How a user can request account/data deletion (point to the in-app Delete Account flow)</li>
+        <li>A contact email for privacy questions</li>
+        <li>Last-updated date</li>
+      </ul>
+    </div>
+
+    <div class="note">
+      <span>⚠</span>
+      <div><b>You need a URL, not a document.</b> Play Console specifically requires a hosted, publicly accessible link — a Google Doc set to "anyone with the link," a simple page on your own domain, or a free privacy-policy generator page all work. It just has to resolve for Google's reviewers without a login.</div>
+    </div>
+  </section>
+
+  <section id="checklist">
+    <div class="section-head">
+      <span class="section-num">05</span>
+      <h2>Pre-submission checklist</h2>
+    </div>
+    <p class="lede">Everything above, as one list to work through before you hit "Send for review."</p>
+
+    <div class="card">
+      <ul class="checklist">
+        <li>Delete the stale "Aadhaar card scanning" comment from <code>AndroidManifest.xml</code> (cosmetic, but avoids an unnecessary reviewer question)</li>
+        <li>Privacy Policy page live at a public URL</li>
+        <li>Data Safety form completed in Play Console using the answer key in Section 03</li>
+        <li>Permission justifications pasted in where Play Console asks for CAMERA / RECORD_AUDIO / LOCATION (Section 01)</li>
+        <li>App signed with your release keystore, versionCode bumped from the last submitted build</li>
+        <li>Store listing: screenshots, short description, full description, feature graphic</li>
+        <li>Content rating questionnaire completed (Play Console → Policy → App content → Content ratings)</li>
+        <li>Target API level meets Play's current minimum (check Play Console's own warning banner — this changes yearly)</li>
+        <li>Test the release build (not debug) end-to-end one more time — OTP sign-in, job posting, chat, rating</li>
+      </ul>
+    </div>
+
+    <div class="note">
+      <b>Given your account is already approved and has published before:</b> if everything above is ready when you submit, expect review to land on the faster end — typically a few hours to 2–3 days. The two things most likely to slow it down are an incomplete Data Safety form and a broken/missing Privacy Policy link, both of which are covered above.
+    </div>
+  </section>
+
+  <footer>
+    Compiled from the current UniShram codebase (AndroidManifest.xml, pubspec.yaml, Firestore data models) — re-check this if permissions or data collection change in a future build.
+  </footer>
+
+</div>
+
+<script>
+(function(){
+  document.querySelectorAll('.copybtn').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var targetId = btn.getAttribute('data-copy');
+      var text = '';
+      if (targetId) {
+        var el = document.getElementById(targetId);
+        text = el ? el.textContent : '';
+      } else {
+        var block = btn.closest('.code-block') || btn.closest('.qa');
+        text = block ? block.textContent.replace(btn.textContent, '').trim() : '';
+      }
+      try {
+        navigator.clipboard.writeText(text.trim());
+        var orig = btn.textContent;
+        btn.textContent = 'Copied';
+        btn.classList.add('copied');
+        setTimeout(function(){ btn.textContent = orig; btn.classList.remove('copied'); }, 1400);
+      } catch(e) {}
+    });
+  });
+})();
+</script>

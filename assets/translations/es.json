@@ -1,0 +1,100 @@
+{
+  "appName": "LabourLink",
+  "tagline": "El trabajo que te encuentra",
+
+  "common": {
+    "continueAction": "Continuar",
+    "cancel": "Cancelar",
+    "save": "Guardar",
+    "next": "Siguiente",
+    "back": "Atrás",
+    "skip": "Omitir",
+    "done": "Listo",
+    "retry": "Reintentar",
+    "loading": "Cargando...",
+    "optional": "Opcional"
+  },
+
+  "auth": {
+    "login": "Iniciar sesión",
+    "signup": "Crear cuenta",
+    "logout": "Cerrar sesión",
+    "email": "Correo electrónico",
+    "phone": "Número de teléfono",
+    "password": "Contraseña",
+    "confirmPassword": "Confirmar contraseña",
+    "fullName": "Nombre completo",
+    "noAccount": "¿No tienes cuenta?",
+    "hasAccount": "¿Ya tienes cuenta?",
+    "welcomeBack": "Bienvenido de nuevo",
+    "loginSubtitle": "Inicia sesión para encontrar trabajo y contratar",
+    "signupSubtitle": "Únete en menos de un minuto"
+  },
+
+  "roles": {
+    "title": "¿Cómo usarás LabourLink?",
+    "subtitle": "Puedes cambiarlo después en tu perfil",
+    "labour": "Busco trabajo",
+    "labourDesc": "Encuentra trabajos, fija tu precio, cobra",
+    "contractor": "Contrato y acepto trabajos",
+    "contractorDesc": "Contrata trabajadores y postula a proyectos",
+    "client": "Necesito contratar",
+    "clientDesc": "Publica un trabajo y contrata gente de confianza"
+  },
+
+  "profile": {
+    "title": "Perfil",
+    "setupTitle": "Configura tu perfil",
+    "setupSubtitle": "Esto es lo que verán los demás",
+    "bio": "Sobre ti",
+    "bioHint": "Cuenta tu experiencia",
+    "skills": "Tus habilidades",
+    "skillsHint": "Elige todo lo que sabes hacer",
+    "language": "Idioma",
+    "edit": "Editar perfil",
+    "jobsDone": "Trabajos hechos",
+    "rating": "Valoración",
+    "noRating": "Sin valoraciones aún",
+    "memberSince": "Miembro desde {}"
+  },
+
+  "skills": {
+    "masonry": "Albañilería",
+    "carpentry": "Carpintería",
+    "plumbing": "Fontanería",
+    "electrical": "Electricidad",
+    "painting": "Pintura",
+    "welding": "Soldadura",
+    "tiling": "Colocación de azulejos",
+    "roofing": "Techado",
+    "landscaping": "Jardinería",
+    "cleaning": "Limpieza",
+    "loading": "Carga y mudanzas",
+    "generalLabour": "Trabajo general"
+  },
+
+  "home": {
+    "greeting": "Hola, {}",
+    "findWork": "Buscar trabajo",
+    "myJobs": "Mis trabajos",
+    "postJob": "Publicar trabajo",
+    "messages": "Mensajes",
+    "comingSoon": "Próximamente",
+    "phaseNotice": "Las ofertas de trabajo llegan en la próxima fase."
+  },
+
+  "validation": {
+    "required": "Esto no puede estar vacío",
+    "emailInvalid": "Introduce un correo válido",
+    "passwordShort": "Usa al menos 6 caracteres",
+    "passwordMismatch": "Las contraseñas no coinciden",
+    "nameShort": "Introduce tu nombre completo",
+    "pickOneSkill": "Elige al menos una habilidad"
+  },
+
+  "errors": {
+    "emailTaken": "Ese correo ya está registrado",
+    "badCredentials": "Correo o contraseña incorrectos",
+    "generic": "Algo salió mal. Inténtalo de nuevo."
+  }
+}

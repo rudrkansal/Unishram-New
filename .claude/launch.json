@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "unishram-web",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8099", "--bind", "127.0.0.1", "--directory", "build/web"],
+      "port": 8099,
+      "autoPort": true
+    }
+  ]
+}

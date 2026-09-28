@@ -1,0 +1,100 @@
+{
+  "appName": "LabourLink",
+  "tagline": "Work that finds you",
+
+  "common": {
+    "continueAction": "Continue",
+    "cancel": "Cancel",
+    "save": "Save",
+    "next": "Next",
+    "back": "Back",
+    "skip": "Skip",
+    "done": "Done",
+    "retry": "Retry",
+    "loading": "Loading...",
+    "optional": "Optional"
+  },
+
+  "auth": {
+    "login": "Log in",
+    "signup": "Create account",
+    "logout": "Log out",
+    "email": "Email",
+    "phone": "Phone number",
+    "password": "Password",
+    "confirmPassword": "Confirm password",
+    "fullName": "Full name",
+    "noAccount": "Don't have an account?",
+    "hasAccount": "Already have an account?",
+    "welcomeBack": "Welcome back",
+    "loginSubtitle": "Log in to find work and hire",
+    "signupSubtitle": "Join in under a minute"
+  },
+
+  "roles": {
+    "title": "How will you use LabourLink?",
+    "subtitle": "You can change this later in your profile",
+    "labour": "I want work",
+    "labourDesc": "Find jobs, set your price, get paid",
+    "contractor": "I hire and take on jobs",
+    "contractorDesc": "Hire workers and bid for client projects",
+    "client": "I need work done",
+    "clientDesc": "Post a job and hire trusted people"
+  },
+
+  "profile": {
+    "title": "Profile",
+    "setupTitle": "Set up your profile",
+    "setupSubtitle": "This is what others will see",
+    "bio": "About you",
+    "bioHint": "Tell people about your experience",
+    "skills": "Your skills",
+    "skillsHint": "Pick everything you can do",
+    "language": "Language",
+    "edit": "Edit profile",
+    "jobsDone": "Jobs done",
+    "rating": "Rating",
+    "noRating": "No ratings yet",
+    "memberSince": "Member since {}"
+  },
+
+  "skills": {
+    "masonry": "Masonry",
+    "carpentry": "Carpentry",
+    "plumbing": "Plumbing",
+    "electrical": "Electrical",
+    "painting": "Painting",
+    "welding": "Welding",
+    "tiling": "Tiling",
+    "roofing": "Roofing",
+    "landscaping": "Landscaping",
+    "cleaning": "Cleaning",
+    "loading": "Loading & moving",
+    "generalLabour": "General labour"
+  },
+
+  "home": {
+    "greeting": "Hello, {}",
+    "findWork": "Find work",
+    "myJobs": "My jobs",
+    "postJob": "Post a job",
+    "messages": "Messages",
+    "comingSoon": "Coming soon",
+    "phaseNotice": "Job listings arrive in the next phase."
+  },
+
+  "validation": {
+    "required": "This can't be empty",
+    "emailInvalid": "Enter a valid email",
+    "passwordShort": "Use at least 6 characters",
+    "passwordMismatch": "Passwords don't match",
+    "nameShort": "Enter your full name",
+    "pickOneSkill": "Pick at least one skill"
+  },
+
+  "errors": {
+    "emailTaken": "That email is already registered",
+    "badCredentials": "Wrong email or password",
+    "generic": "Something went wrong. Try again."
+  }
+}

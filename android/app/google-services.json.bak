@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "574256295713",
+    "project_id": "unishram-india",
+    "storage_bucket": "unishram-india.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:574256295713:android:5e829fb11619392cfd5860",
+        "android_client_info": {
+          "package_name": "com.labourlink.labour_marketplace"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAydw-nsUzbvhz6fmwpE-nY10fQlRk0EEQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

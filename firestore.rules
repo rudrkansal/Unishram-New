@@ -1,0 +1,232 @@
+rules_version = '2';
+
+// UniShram security rules.
+//
+// Principle: a signed-in user may read what the marketplace needs them to see,
+// but may only write their own documents. Anything that must be trustworthy —
+// application counts, ratings, verification flags, suspensions — is written by
+// Cloud Functions with the Admin SDK, never by a client.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+    function unchanged(field) {
+      return !(field in request.resource.data) ||
+             (resource != null && request.resource.data[field] == resource.data[field]);
+    }
+    function isPlainText(value, maxLen) {
+      return value is string && value.size() <= maxLen;
+    }
+    // A moment between one job post and the next, stamped by the
+    // onJobPosted function (see the `jobs` create rule and `users.update`).
+    function notRateLimited() {
+      let last = get(/databases/$(database)/documents/users/$(request.auth.uid))
+          .data.get('lastJobPostedAt', null);
+      return last == null || request.time > last + duration.value(15, 's');
+    }
+
+    // True if the other participant in this thread has blocked [sender] —
+    // enforced here, not just filtered in the UI, so a blocked user genuinely
+    // cannot get a new message through.
+    function threadBlockedFor(threadId, sender) {
+      let thread = get(/databases/$(database)/documents/threads/$(threadId)).data;
+      let other = thread.participants[0] == sender
+          ? thread.participants[1] : thread.participants[0];
+      return exists(/databases/$(database)/documents/users/$(other)/blocks/$(sender));
+    }
+
+    // True if the job application tied to this thread was rejected — chat
+    // history stays visible, but neither side may send anything new until
+    // the application is legitimately reopened (status moves off 'rejected').
+    function threadApplicationRejected(threadId) {
+      let thread = get(/databases/$(database)/documents/threads/$(threadId)).data;
+      let jobId = thread.get('jobId', null);
+      let p0 = jobId == null ? null : jobId + '_' + thread.participants[0];
+      let p1 = jobId == null ? null : jobId + '_' + thread.participants[1];
+      return jobId != null && (
+        (exists(/databases/$(database)/documents/applications/$(p0)) &&
+         get(/databases/$(database)/documents/applications/$(p0)).data.status == 'rejected') ||
+        (exists(/databases/$(database)/documents/applications/$(p1)) &&
+         get(/databases/$(database)/documents/applications/$(p1)).data.status == 'rejected')
+      );
+    }
+
+    match /users/{uid} {
+      // Profiles are visible to signed-in users: a contractor has to be able to
+      // look at a worker before hiring them.
+      allow read: if signedIn();
+
+      allow create: if isSelf(uid)
+        && request.resource.data.role in ['labourer', 'contractor', 'client', 'vendor']
+        // 300, not 100: isPlainText's size() counts UTF-8 *bytes*, and
+        // Devanagari/Gurmukhi/Telugu/etc. characters run ~3 bytes each — a
+        // 100-byte cap silently rejects a full Indian name (first + middle/
+        // father's + last) in most of this app's own languages, at exactly
+        // the step that creates the account.
+        && isPlainText(request.resource.data.fullName, 300)
+        // Trust flags are server-owned from the very first write.
+        && request.resource.data.get('suspended', false) == false
+        && request.resource.data.get('ratingAverage', 0) == 0
+        && request.resource.data.get('ratingCount', 0) == 0;
+
+      allow update: if isSelf(uid)
+        && isPlainText(request.resource.data.get('fullName', ''), 300)
+        && unchanged('suspended')
+        && unchanged('ratingAverage')
+        && unchanged('ratingCount')
+        && unchanged('role')
+        // Only the onJobPosted function may move this — a client resetting
+        // its own cooldown would defeat the point of having one.
+        && unchanged('lastJobPostedAt');
+
+      // Deletion runs through the callable function so the user's jobs,
+      // applications and photos go with it.
+      allow delete: if false;
+
+      match /tokens/{token} {
+        allow read, write: if isSelf(uid);
+      }
+      // Who this user has blocked. Only they may see or change their own
+      // block list, but the message-create rule below reads across users'
+      // block lists to enforce blocking, not just filter it client-side.
+      match /blocks/{blockedUid} {
+        allow read, write: if isSelf(uid);
+      }
+    }
+
+    match /jobs/{jobId} {
+      allow read: if signedIn();
+
+      allow create: if signedIn()
+        && request.resource.data.postedBy == request.auth.uid
+        // 300 for the same byte-vs-character reason as fullName above.
+        && isPlainText(request.resource.data.title, 300)
+        && isPlainText(request.resource.data.description, 2000)
+        && request.resource.data.wage is int
+        && request.resource.data.wage > 0
+        && request.resource.data.wage <= 100000
+        && request.resource.data.get('applicantCount', 0) == 0
+        && request.resource.data.status == 'open'
+        && notRateLimited();
+
+      // The poster may edit their own job but never its applicant tally.
+      allow update: if signedIn()
+        && resource.data.postedBy == request.auth.uid
+        && unchanged('postedBy')
+        && unchanged('applicantCount');
+
+      allow delete: if signedIn() && resource.data.postedBy == request.auth.uid;
+    }
+
+    match /applications/{applicationId} {
+      // Only the two parties to an application can see it.
+      allow read: if signedIn()
+        && (resource.data.workerId == request.auth.uid
+            || resource.data.contractorId == request.auth.uid);
+
+      // The id is jobId_workerId, which makes a second application impossible.
+      allow create: if signedIn()
+        && request.resource.data.workerId == request.auth.uid
+        && applicationId == request.resource.data.jobId + '_' + request.auth.uid
+        && request.resource.data.status == 'pending';
+
+      // The worker may withdraw; the contractor may shortlist, reject or hire.
+      allow update: if signedIn()
+        && ((resource.data.workerId == request.auth.uid
+             && request.resource.data.status == 'withdrawn')
+            || (resource.data.contractorId == request.auth.uid
+                && request.resource.data.status in ['pending', 'shortlisted', 'rejected', 'hired']))
+        && unchanged('jobId') && unchanged('workerId') && unchanged('contractorId');
+
+      allow delete: if false;
+    }
+
+    match /threads/{threadId} {
+      allow read: if signedIn() && request.auth.uid in resource.data.participants;
+
+      allow create: if signedIn()
+        && request.auth.uid in request.resource.data.participants
+        && request.resource.data.participants.size() == 2;
+
+      allow update: if signedIn() && request.auth.uid in resource.data.participants;
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if signedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/threads/$(threadId)).data.participants;
+
+        allow create: if signedIn()
+          && request.resource.data.senderId == request.auth.uid
+          && isPlainText(request.resource.data.text, 2000)
+          && request.resource.data.text.size() > 0
+          && request.auth.uid in get(/databases/$(database)/documents/threads/$(threadId)).data.participants
+          && !threadBlockedFor(threadId, request.auth.uid)
+          && !threadApplicationRejected(threadId);
+
+        // A sent message cannot be rewritten after the fact.
+        allow update, delete: if false;
+      }
+    }
+
+    match /listings/{listingId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.vendorId == request.auth.uid
+        && isPlainText(request.resource.data.item, 300)
+        && request.resource.data.price is int
+        && request.resource.data.price > 0;
+      allow update, delete: if signedIn() && resource.data.vendorId == request.auth.uid;
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if signedIn();
+      // Ratings are recomputed by a function; a review cannot be edited later.
+      allow create: if signedIn()
+        && request.resource.data.byUserId == request.auth.uid
+        && request.resource.data.aboutUserId != request.auth.uid
+        && request.resource.data.rating is int
+        && request.resource.data.rating >= 1
+        && request.resource.data.rating <= 5
+        && isPlainText(request.resource.data.get('comment', ''), 1000);
+      allow update, delete: if false;
+    }
+
+    match /appRatings/{uid} {
+      // One doc per user, id == their own uid, so a rating is an upsert
+      // rather than an ever-growing list — feedback on the app itself, not
+      // on another user. Only the owner can read their own doc — enough to
+      // let the app check "have I already rated this?" before showing the
+      // auto-prompt again, without exposing anyone's feedback to others.
+      allow read: if isSelf(uid);
+      allow create, update: if signedIn()
+        && uid == request.auth.uid
+        && request.resource.data.rating is int
+        && request.resource.data.rating >= 1
+        && request.resource.data.rating <= 5
+        && isPlainText(request.resource.data.get('comment', ''), 1000);
+      allow delete: if false;
+    }
+
+    match /reports/{reportId} {
+      // Abuse reports: write-only from clients, read by moderators via console.
+      allow create: if signedIn()
+        && request.resource.data.byUserId == request.auth.uid
+        && request.resource.data.reasons is list
+        && request.resource.data.reasons.size() > 0;
+      allow read, update, delete: if false;
+    }
+
+    // Moderator-maintained values the app reads before login exists (minimum
+    // wage on the onboarding wage screen). Readable by anyone, writable only
+    // from the console/Admin SDK.
+    match /config/{doc} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}
