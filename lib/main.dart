@@ -46,13 +46,18 @@ Future<void> main() async {
         options: DefaultFirebaseOptions.currentPlatform);
     firebaseReady = true;
 
-    // Enable Firestore offline persistence for job browsing without network
+    // Configure Firestore offline persistence for job browsing without network.
+    // This MUST be done immediately after Firebase.initializeApp() and BEFORE
+    // any Firestore reads/listeners are created.
     if (!kIsWeb) {
       try {
-        // Firestore offline persistence is enabled by default on mobile
-        await FirebaseFirestore.instance.enableNetwork();
+        FirebaseFirestore.instance.settings = const Settings(
+          persistenceEnabled: true,
+          cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
+        );
       } catch (e) {
-        debugPrint('Offline persistence setup failed: $e');
+        debugPrint('Firestore offline persistence config failed: $e');
+        // Non-fatal: app continues; offline mode may be unavailable
       }
     }
 
