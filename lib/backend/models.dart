@@ -56,6 +56,7 @@ class UserDoc {
   final double ratingAverage;
   final int ratingCount;
   final bool suspended;
+  final bool sessionRevoked;
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
@@ -94,6 +95,7 @@ class UserDoc {
     this.ratingAverage = 0,
     this.ratingCount = 0,
     this.suspended = false,
+    this.sessionRevoked = false,
     this.createdAt,
     this.updatedAt,
   });
@@ -143,6 +145,7 @@ class UserDoc {
         'ratingAverage': ratingAverage,
         'ratingCount': ratingCount,
         'suspended': suspended,
+        'sessionRevoked': sessionRevoked,
         'updatedAt': FieldValue.serverTimestamp(),
       };
 
@@ -189,6 +192,7 @@ class UserDoc {
       ratingAverage: (d['ratingAverage'] as num?)?.toDouble() ?? 0,
       ratingCount: _i(d['ratingCount']),
       suspended: d['suspended'] ?? false,
+      sessionRevoked: d['sessionRevoked'] ?? false,
       createdAt: _t(d['createdAt']),
       updatedAt: _t(d['updatedAt']),
     );

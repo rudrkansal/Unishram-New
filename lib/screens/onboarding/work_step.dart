@@ -505,6 +505,7 @@ class PhoneVerificationBlock extends StatelessWidget {
                     app.otpCode = '';
                     app.authError = '';
                     app.otpSentAt = null;
+                    app.otpResendCount = 0; // Reset resend counter for new number
                   }
                 }),
               ),

@@ -324,10 +324,11 @@ class ChatMessage {
   final bool mine;
   final String text;
   final String time;
-  const ChatMessage(this.mine, this.text, this.time);
-  Map<String, dynamic> toJson() => {'mine': mine, 'text': text, 'time': time};
+  final String? senderId; // Added for blocking support
+  const ChatMessage(this.mine, this.text, this.time, {this.senderId});
+  Map<String, dynamic> toJson() => {'mine': mine, 'text': text, 'time': time, 'senderId': senderId};
   static ChatMessage fromJson(Map<String, dynamic> j) =>
-      ChatMessage(j['mine'] ?? false, j['text'] ?? '', j['time'] ?? '');
+      ChatMessage(j['mine'] ?? false, j['text'] ?? '', j['time'] ?? '', senderId: j['senderId'] as String?);
 }
 
 class Listing {
@@ -415,6 +416,7 @@ class AppState extends ChangeNotifier {
   SharedPreferences? _prefs;
   final PincodeLookup _pincodeLookup = const LocalPincodeLookup();
   final IndiaPostPincodeLookup _indiaPost = const IndiaPostPincodeLookup();
+  Timer? _suspensionCheckTimer; // Periodic check for user suspension
 
   bool get online => backend != null;
   bool get signedIn => backend?.isSignedIn ?? false;
@@ -492,9 +494,13 @@ class AppState extends ChangeNotifier {
 
   /// When the last OTP actually went out — drives the resend cooldown, so a
   /// user can't hammer "Resend" and trip Firebase's abuse rate-limit
-  /// ("too-many-requests") within seconds of the first send.
+  /// ("too-many-requests") within seconds of the first send. Persisted to handle
+  /// app closure during cooldown period.
   DateTime? otpSentAt;
+  /// Track resend count per phone number to prevent abuse (max 4 resends per session)
+  int otpResendCount = 0;
   static const Duration otpResendCooldown = Duration(seconds: 30);
+  static const int maxOtpResends = 4;
 
   /// Seconds left before "Resend OTP" is tappable again; 0 once it's clear.
   int get otpResendSecondsLeft {
@@ -585,6 +591,11 @@ class AppState extends ChangeNotifier {
       locationManual = d['locationManual'] ?? false;
       showExactDob = d['showExactDob'] ?? false;
       otpSent = d['otpSent'] ?? false;
+      // Restore OTP cooldown timestamp to persist across app restarts
+      final otpTimestamp = d['otpSentAt'] as String?;
+      if (otpTimestamp != null) {
+        otpSentAt = DateTime.parse(otpTimestamp);
+      }
       appliedJobIds = List<String>.from(d['appliedJobIds'] ?? const []);
       postedJobs = (d['postedJobs'] as List? ?? [])
           .map((e) => PostedJob.fromJson(Map<String, dynamic>.from(e)))
@@ -668,6 +679,7 @@ class AppState extends ChangeNotifier {
         'locationManual': locationManual,
         'showExactDob': showExactDob,
         'otpSent': otpSent,
+        'otpSentAt': otpSentAt?.toIso8601String(),
         'appliedJobIds': appliedJobIds,
         'postedJobs': postedJobs.map((e) => e.toJson()).toList(),
         'applicantStatuses': applicantStatuses,
@@ -1087,10 +1099,22 @@ class AppState extends ChangeNotifier {
 
   // ------------------------------------------------------------------ OTP
 
+  /// Validates Indian phone number: must be 10 digits, start with 6-9, not all same digit.
+  bool _isValidIndianPhone(String phone) {
+    if (phone.length != 10) return false;
+    final first = phone[0];
+    if (first != '6' && first != '7' && first != '8' && first != '9') return false;
+    // Reject all-same-digit patterns (e.g., 9999999999, 8888888888)
+    return !phone.split('').every((digit) => digit == phone[0]);
+  }
+
   /// Sends a real SMS through Firebase Phone Auth. Without a backend the demo
   /// path is used instead, so the UI can still be exercised.
   Future<void> sendOtp({bool resend = false}) async {
-    if (lp.mobileNumber.length != 10) return;
+    if (!_isValidIndianPhone(lp.mobileNumber)) {
+      update(() => authError = t['authErrorInvalidPhone']);
+      return;
+    }
     // A "resend" only means something for the number the last OTP actually
     // went to. If the number has changed since then (the user spotted a
     // typo and fixed it), this must be a fresh send — reusing the old
@@ -1098,6 +1122,18 @@ class AppState extends ChangeNotifier {
     // drop the request, so none of the callbacks below ever fire and the
     // button looks stuck forever.
     final isResend = resend && _otpSentForNumber == lp.mobileNumber;
+
+    // Reset resend count if number changed (fresh verification session)
+    if (_otpSentForNumber != null && _otpSentForNumber != lp.mobileNumber) {
+      otpResendCount = 0;
+    }
+
+    // Prevent abuse: max 4 resends per phone number per session
+    if (isResend && otpResendCount >= maxOtpResends) {
+      update(() => authError = t['authErrorTooManyAttempts']);
+      return;
+    }
+
     // Belt-and-braces alongside the UI disabling the button during the
     // cooldown — never let a resend through early even if something else
     // triggers this call.
@@ -1124,6 +1160,7 @@ class AppState extends ChangeNotifier {
         otpCode = '';
         _otpSentForNumber = lp.mobileNumber;
         otpSentAt = DateTime.now();
+        if (isResend) otpResendCount++;
       }),
       // Android can read the SMS itself, which signs the user in with no typing.
       onVerified: (_) async {
@@ -1142,6 +1179,15 @@ class AppState extends ChangeNotifier {
 
   Future<void> verifyOtp() async {
     if (otpCode.length < 6) return;
+    // Check if OTP has expired (Firebase timeout is 60 seconds)
+    final sentAt = otpSentAt;
+    if (sentAt != null && DateTime.now().difference(sentAt).inSeconds > 60) {
+      update(() {
+        authError = t['authErrorSessionExpired'];
+        otpCode = '';
+      });
+      return;
+    }
     final api = backend;
     if (api == null) {
       update(() => lp.phoneVerified = true);
@@ -1155,13 +1201,17 @@ class AppState extends ChangeNotifier {
       await api.auth.verifyOtp(otpCode);
       update(() {
         otpSending = false;
+        // Mark as verified after Firebase confirms
         lp.phoneVerified = true;
       });
       await _afterSignIn();
     } catch (e) {
       update(() {
         otpSending = false;
+        // Do NOT mark as verified if authentication failed
+        lp.phoneVerified = false;
         authError = t[e is String ? e : 'authErrorGeneric'];
+        otpCode = '';
       });
     }
   }
@@ -1173,7 +1223,23 @@ class AppState extends ChangeNotifier {
     if (api == null) return;
     await api.registerForPush();
     await syncFromServer();
+
+    // Check if session was revoked (e.g., due to abuse or admin action)
+    final id = api.uid;
+    if (id != null) {
+      final userDoc = await api.users.fetch(id);
+      if (userDoc?.sessionRevoked ?? false) {
+        await signOut();
+        update(() {
+          authError = t['sessionRevokedError'] ?? 'Session has been revoked. Please sign in again.';
+          screen = Screen.splash;
+        });
+        return;
+      }
+    }
+
     await pushProfile();
+    _startSuspensionCheck(); // Monitor for suspension changes
   }
 
   /// Overwrites local state with the server's copy when one exists.
@@ -1243,26 +1309,32 @@ class AppState extends ChangeNotifier {
 
   /// Writes the local profile up. Called at each onboarding step so a dropped
   /// connection never loses what the worker already typed.
-  /// Saves the profile, retrying once after a short delay on failure before
+  /// Saves the profile with exponential backoff retries (max 3 attempts) before
   /// showing an error. Firebase's ID token isn't always immediately ready
   /// for a Firestore write in the instant right after sign-in resolves —
   /// this is the very first write a brand-new account ever makes, right on
   /// the heels of verifyOtp, so it's exactly where that race condition
-  /// bites hardest. A silent retry fixes the common case instead of
-  /// scaring a new user with "could not save" on their first ever save.
+  /// bites hardest. Exponential backoff (900ms → 1800ms) fixes the common case.
   Future<void> pushProfile() async {
     final api = backend;
     final id = api?.uid;
     if (api == null || id == null || role == null) return;
-    try {
-      await _savePushedProfile(api, id);
-    } catch (_) {
-      await Future.delayed(const Duration(milliseconds: 900));
+    for (int attempt = 0; attempt < 3; attempt++) {
       try {
         await _savePushedProfile(api, id);
-      } catch (e) {
-        authError = t['authErrorSaveProfile'];
-        notifyListeners();
+        return; // Success - profile saved, state is consistent
+      } catch (_) {
+        if (attempt == 2) {
+          // Final attempt failed - revert phoneVerified to prevent inconsistent state
+          update(() {
+            lp.phoneVerified = false;
+            authError = t['authErrorSaveProfile'];
+          });
+          return;
+        }
+        // Exponential backoff: 900ms, then 1800ms
+        final delayMs = 900 * (attempt + 1);
+        await Future.delayed(Duration(milliseconds: delayMs));
       }
     }
   }
@@ -1343,6 +1415,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> signOut() async {
+    _stopSuspensionCheck(); // Stop monitoring suspension
     final api = backend;
     if (api != null) {
       await api.unregisterPush();
@@ -1357,6 +1430,49 @@ class AppState extends ChangeNotifier {
     if (api == null) return resetDemo();
     await api.deleteAccount();
     await resetDemo();
+  }
+
+  /// Starts periodic suspension checks (every 5 minutes). Signs user out if suspended.
+  void _startSuspensionCheck() {
+    _suspensionCheckTimer?.cancel();
+    _suspensionCheckTimer = Timer.periodic(const Duration(minutes: 5), (_) async {
+      final api = backend;
+      final id = api?.uid;
+      if (api == null || id == null || !signedIn) return;
+      try {
+        final user = await api.users.fetch(id);
+        if (user?.suspended ?? false) {
+          // User is suspended - force sign out
+          await signOut();
+          update(() {
+            authError = t['userSuspendedError'];
+            screen = Screen.splash;
+          });
+        }
+      } catch (_) {
+        // Ignore errors - suspension check is non-critical
+      }
+    });
+  }
+
+  /// Stops the suspension check timer.
+  void _stopSuspensionCheck() {
+    _suspensionCheckTimer?.cancel();
+    _suspensionCheckTimer = null;
+  }
+
+  /// Retries a Future with exponential backoff (max 3 attempts)
+  Future<T> _retryWithBackoff<T>(Future<T> Function() operation) async {
+    for (int attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await operation();
+      } catch (e) {
+        if (attempt == 2) rethrow; // Final attempt failed
+        final delayMs = 500 * (attempt + 1); // 500ms, 1000ms
+        await Future.delayed(Duration(milliseconds: delayMs));
+      }
+    }
+    throw Exception('Max retries exceeded');
   }
 
   // ------------------------------------------------------------ job feed
@@ -1472,13 +1588,38 @@ class AppState extends ChangeNotifier {
       _lastJobPostAt != null &&
       DateTime.now().difference(_lastJobPostAt!) < kJobPostCooldown;
 
+  /// Seconds remaining before next job can be posted; 0 if not on cooldown.
+  int get postJobCooldownSecondsLeft {
+    final lastPost = _lastJobPostAt;
+    if (lastPost == null) return 0;
+    final elapsed = DateTime.now().difference(lastPost).inSeconds;
+    final remaining = kJobPostCooldown.inSeconds - elapsed;
+    return remaining > 0 ? remaining : 0;
+  }
+
   void postJob() {
-    if (postTitle.trim().isEmpty ||
-        postWage.isEmpty ||
-        postWageBelowMin ||
-        postPincodeError.isNotEmpty ||
-        postHoursError.isNotEmpty ||
-        postJobOnCooldown) {
+    if (postTitle.trim().isEmpty) {
+      showToast(t['fieldRequired'] ?? 'Job title required');
+      return;
+    }
+    if (postWage.isEmpty) {
+      showToast(t['fieldRequired'] ?? 'Wage required');
+      return;
+    }
+    if (postWageBelowMin) {
+      showToast(t['wageTooLowError']);
+      return;
+    }
+    if (postPincodeError.isNotEmpty) {
+      showToast(postPincodeError);
+      return;
+    }
+    if (postHoursError.isNotEmpty) {
+      showToast(postHoursError);
+      return;
+    }
+    if (postJobOnCooldown) {
+      showToast('${t['tryAgainIn']} ${postJobCooldownSecondsLeft}${t['secondsShort']}');
       return;
     }
     _lastJobPostAt = DateTime.now();
@@ -2054,6 +2195,20 @@ class AppState extends ChangeNotifier {
     return doc.exists;
   }
 
+  /// Fetch contractor contact info from protected collection. Only approved
+  /// applicants should call this. Returns null if not found or offline.
+  Future<Map<String, dynamic>?> getContractorContact(String jobId) async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('contractorContacts')
+          .doc(jobId)
+          .get();
+      return doc.data();
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// A job counts as ripe for the forced rating prompt once its end date has
   /// arrived — not before, and not indefinitely after (14 days, so an old
   /// unrated job doesn't nag forever).
@@ -2346,7 +2501,7 @@ class AppState extends ChangeNotifier {
         postedBy: id,
         contractorName:
             lp.businessName.isNotEmpty ? lp.businessName : displayName,
-        contractorPhone: lp.mobileNumber,
+        contractorPhone: '', // Private: fetched from contractorContacts collection instead
         title: postTitle.trim(),
         skill: postSkill,
         description: postDescription.trim(),
@@ -2388,10 +2543,21 @@ class AppState extends ChangeNotifier {
       String jobId, String workerId, String status) async {
     final api = backend;
     if (api == null) return setApplicantStatus(jobId, workerId, status);
+
+    // Optimistic update: show status change immediately
+    final appId = ApplicationDoc.idFor(jobId, workerId);
+    final oldStatus = applicantStatuses[appId];
+    update(() => applicantStatuses[appId] = status);
+
     try {
-      await api.applications
-          .setStatus(ApplicationDoc.idFor(jobId, workerId), status);
+      await api.applications.setStatus(appId, status);
     } catch (_) {
+      // Revert on failure
+      if (oldStatus != null) {
+        update(() => applicantStatuses[appId] = oldStatus);
+      } else {
+        update(() => applicantStatuses.remove(appId));
+      }
       showToast(t['actionFailed']);
     }
   }

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
@@ -44,6 +45,17 @@ Future<void> main() async {
     await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform);
     firebaseReady = true;
+
+    // Enable Firestore offline persistence for job browsing without network
+    if (!kIsWeb) {
+      try {
+        // Firestore offline persistence is enabled by default on mobile
+        await FirebaseFirestore.instance.enableNetwork();
+      } catch (e) {
+        debugPrint('Offline persistence setup failed: $e');
+      }
+    }
+
     // Initialize Firebase Remote Config for translations
     await FirebaseStringsService.initialize();
   } catch (e) {

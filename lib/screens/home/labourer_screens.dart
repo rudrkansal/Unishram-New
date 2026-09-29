@@ -394,15 +394,29 @@ class LabourerJobDetail extends StatelessWidget {
                         final approved = snapshot.data != null &&
                             AppState.isApprovedStatus(snapshot.data!.status);
                         if (approved) {
-                          return _SmallAccentButton(
-                            label: t['contact'],
-                            onTap: () => context.app.openContact(ContactTarget(
-                              name: job.contractor,
-                              subtitle: '${t['contractorLabel']} · ${job.area}',
-                              phone: job.contractorPhone,
-                              chatJobId: job.id,
-                              chatPeerId: job.contractorUid,
-                            )),
+                          return FutureBuilder<Map<String, dynamic>?>(
+                            future: app.getContractorContact(job.id),
+                            builder: (context, phoneSnapshot) {
+                              final phone = phoneSnapshot.data?['contractorPhone'] as String? ?? '';
+                              return _SmallAccentButton(
+                                label: t['contact'],
+                                onTap: phone.isNotEmpty
+                                    ? () => context.app.openContact(ContactTarget(
+                                      name: job.contractor,
+                                      subtitle: '${t['contractorLabel']} · ${job.area}',
+                                      phone: phone,
+                                      chatJobId: job.id,
+                                      chatPeerId: job.contractorUid,
+                                    ))
+                                    : () => context.app.openChatLive(
+                                      peerId: job.contractorUid,
+                                      peerName: job.contractor,
+                                      jobId: job.id,
+                                      jobTitle: job.title,
+                                      back: Screen.labourerJobDetail,
+                                    ),
+                              );
+                            },
                           );
                         }
                         return _SmallAccentButton(
@@ -631,19 +645,27 @@ class _ApplicationCard extends StatelessWidget {
                     // shortlisted or hired for this job; messaging is always
                     // open regardless of status.
                     if (AppState.isApprovedStatus(application.status)) ...[
-                      TextButton(
-                        onPressed: () => context.app.openContact(ContactTarget(
-                          name: job.contractor,
-                          subtitle: '${t['contractorLabel']} · ${job.area}',
-                          phone: job.contractorPhone,
-                          chatJobId: job.id,
-                          chatPeerId: application.contractorId,
-                        )),
-                        child: Text('${t['contact']} ›',
-                            style: const TextStyle(
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w700,
+                      FutureBuilder<Map<String, dynamic>?>(
+                        future: app.getContractorContact(job.id),
+                        builder: (context, phoneSnapshot) {
+                          final phone = phoneSnapshot.data?['contractorPhone'] as String? ?? '';
+                          return TextButton(
+                            onPressed: phone.isNotEmpty
+                                ? () => context.app.openContact(ContactTarget(
+                                  name: job.contractor,
+                                  subtitle: '${t['contractorLabel']} · ${job.area}',
+                                  phone: phone,
+                                  chatJobId: job.id,
+                                  chatPeerId: application.contractorId,
+                                ))
+                                : null,
+                            child: Text('${t['contact']} ›',
+                                style: const TextStyle(
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w700,
                                 color: C.accent)),
+                          );
+                        },
                       ),
                     ],
                     TextButton(

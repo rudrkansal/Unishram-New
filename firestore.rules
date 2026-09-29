@@ -99,12 +99,24 @@ service cloud.firestore {
       }
     }
 
+    // Contractor contact info: only readable by contractor or approved applicants
+    match /contractorContacts/{jobId} {
+      allow read: if signedIn() && (
+        // Contractor can see their own contact info
+        resource.data.contractorId == request.auth.uid ||
+        // Applicant can see if hired/shortlisted
+        exists(/databases/$(database)/documents/applications/$(jobId + '_' + request.auth.uid)) &&
+        get(/databases/$(database)/documents/applications/$(jobId + '_' + request.auth.uid)).data.status in ['hired', 'shortlisted']
+      );
+      allow write: if false; // Admin only, via Cloud Function
+    }
+
     match /jobs/{jobId} {
+      // Contractor phone removed from public job document; fetch from contractorContacts instead
       allow read: if signedIn();
 
       allow create: if signedIn()
         && request.resource.data.postedBy == request.auth.uid
-        // 300 for the same byte-vs-character reason as fullName above.
         && isPlainText(request.resource.data.title, 300)
         && isPlainText(request.resource.data.description, 2000)
         && request.resource.data.wage is int
@@ -114,7 +126,7 @@ service cloud.firestore {
         && request.resource.data.status == 'open'
         && notRateLimited();
 
-      // The poster may edit their own job but never its applicant tally.
+      // The poster may edit their own job but never its applicant tally or postedBy.
       allow update: if signedIn()
         && resource.data.postedBy == request.auth.uid
         && unchanged('postedBy')

@@ -499,7 +499,13 @@ class _ChatThreadState extends State<ChatThread> {
               child: StreamBuilder<List<ChatMessage>>(
               stream: _stream,
               builder: (context, snapshot) {
-                final messages = snapshot.data ?? const <ChatMessage>[];
+                final app = context.appWatch;
+                var messages = snapshot.data ?? const <ChatMessage>[];
+                // Filter out messages from blocked users
+                messages = messages.where((m) {
+                  final senderId = m.senderId;
+                  return senderId == null || !app.blockedUserIds.contains(senderId);
+                }).toList();
                 return ListView.builder(
                   padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
                   itemCount: messages.length,

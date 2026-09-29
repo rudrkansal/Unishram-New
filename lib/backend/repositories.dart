@@ -415,7 +415,7 @@ class ChatRepository {
   Stream<List<MessageDoc>> watchMessages(String threadId) => _threads
       .doc(threadId)
       .collection('messages')
-      .orderBy('sentAt')
+      .orderBy('sentAt', descending: true)
       .limit(200)
       .snapshots()
       .map((s) => s.docs.map(MessageDoc.fromDoc).toList());

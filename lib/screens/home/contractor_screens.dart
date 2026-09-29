@@ -549,6 +549,13 @@ class ContractorPost extends StatelessWidget {
               app.postHoursError.isEmpty,
           onTap: () => context.app.postJobLive(),
         ),
+        if (app.postJobOnCooldown) ...[
+          const SizedBox(height: 10),
+          Text(
+            '${t['actionFailed']}: ${t['tryAgainIn']} ${app.postJobCooldownSecondsLeft}${t['secondsShort']}',
+            style: const TextStyle(fontSize: 12, color: C.warn),
+          ),
+        ],
       ],
     );
   }

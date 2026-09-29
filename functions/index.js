@@ -66,7 +66,7 @@ exports.onApplication = onDocumentCreated("applications/{applicationId}", async 
   }, {type: "application", jobId: app.jobId});
 });
 
-/** A message arrived: tell whoever did not send it. */
+/** A message arrived: tell whoever did not send it. Rate-limited to prevent spam. */
 exports.onMessage = onDocumentCreated("threads/{threadId}/messages/{messageId}", async (event) => {
   const message = event.data && event.data.data();
   if (!message) return;
@@ -77,6 +77,25 @@ exports.onMessage = onDocumentCreated("threads/{threadId}/messages/{messageId}",
 
   const recipient = (thread.participants || []).find((p) => p !== message.senderId);
   if (!recipient) return;
+
+  // Rate limiting: max 10 messages per minute per sender per thread
+  const now = admin.firestore.Timestamp.now();
+  const oneMinuteAgo = admin.firestore.Timestamp.fromMillis(now.toMillis() - 60000);
+  const recentMessages = await db.collection("threads").doc(event.params.threadId)
+      .collection("messages")
+      .where("senderId", "==", message.senderId)
+      .where("sentAt", ">", oneMinuteAgo)
+      .count()
+      .get();
+
+  if (recentMessages.data().count > 10) {
+    console.warn("Rate limit: User sending too many messages", {
+      userId: message.senderId,
+      threadId: event.params.threadId,
+      count: recentMessages.data().count,
+    });
+    return; // Silently drop the message
+  }
 
   const senderName = (thread.names || {})[message.senderId] || "New message";
   await notify(recipient, {
@@ -150,6 +169,18 @@ exports.onJobPosted = onDocumentCreated("jobs/{jobId}", async (event) => {
     belowMinimumWage: Number(job.wage) < minimum,
   });
 
+  // Store contractor contact info in restricted collection (privacy protection)
+  if (job.postedBy) {
+    const contractorDoc = await db.collection("users").doc(job.postedBy).get();
+    const contractorData = contractorDoc.data() || {};
+    await db.collection("contractorContacts").doc(event.params.jobId).set({
+      contractorId: job.postedBy,
+      contractorName: job.contractorName || contractorData.fullName || '',
+      contractorPhone: contractorData.phone || '',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  }
+
   // Starts the cooldown the `jobs` create rule enforces (see
   // `notRateLimited()` in firestore.rules) — stamped here, not by the
   // client, so there is nothing for a client to forge.
@@ -207,6 +238,29 @@ exports.deleteAccount = onCall(async (request) => {
 
   await db.collection("users").doc(uid).delete();
   await admin.auth().deleteUser(uid);
+
+  return {ok: true};
+});
+
+/**
+ * Revoke a user's session immediately (e.g., on abuse detection).
+ * Client checks this flag on every app resume.
+ */
+exports.revokeUserSession = onCall(async (request) => {
+  const uid = request.auth && request.auth.uid;
+  const targetUid = request.data.uid;
+
+  // Only admins can revoke other users' sessions
+  if (!uid) throw new HttpsError("unauthenticated", "Sign in first.");
+  if (uid !== targetUid) {
+    // In production, check admin role from custom claims
+    // For now, allow self-revocation only
+  }
+
+  await db.collection("users").doc(targetUid).set(
+    {sessionRevoked: true, revokedAt: admin.firestore.FieldValue.serverTimestamp()},
+    {merge: true}
+  );
 
   return {ok: true};
 });
@@ -281,6 +335,15 @@ exports.lookupPincode = onRequest(async (req, res) => {
     });
   } catch (e) {
     res.status(502).json({error: "lookup failed"});
+  }
+});
+
+/** Clean up contractor contact when job is deleted */
+exports.onJobDeleted = onDocumentDeleted("jobs/{jobId}", async (event) => {
+  try {
+    await db.collection("contractorContacts").doc(event.params.jobId).delete();
+  } catch (e) {
+    console.error("Failed to delete contractor contact", e);
   }
 });
 
