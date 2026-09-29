@@ -633,9 +633,10 @@ class AppState extends ChangeNotifier {
         screen = saved;
       }
 
-      // If user is logged in and has a role, go directly to their home/profile screen
-      // instead of language select on app restart
-      if (signedIn && role != null && screen == Screen.langSelect) {
+      // For first-time users (not signed in), always show language selection
+      // For returning users (signed in), skip language select and go to home screen
+      if (signedIn && role != null) {
+        // Only skip language selection for users who are already logged in
         screen = switch (role) {
           Role.labourer => Screen.labourerProfile,
           Role.contractor => Screen.contractorHome,
@@ -643,6 +644,9 @@ class AppState extends ChangeNotifier {
           Role.vendor => Screen.vendorListings,
           null => Screen.langSelect,
         };
+      } else if (!signedIn) {
+        // First-time users always go to language selection
+        screen = Screen.langSelect;
       }
     } catch (_) {
       // A corrupt session should never trap the user — start clean instead.
