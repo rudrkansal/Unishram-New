@@ -369,7 +369,20 @@ class ContactTarget {
     this.chatJobId,
     this.chatPeerId,
   });
+
+  /// Chat exists only inside a job relationship (the rules require a jobId and
+  /// an application). A contact card without a job — e.g. from the Find
+  /// screens — offers no Send message.
+  bool get canChat =>
+      chatJobId != null &&
+      chatJobId!.isNotEmpty &&
+      chatPeerId != null &&
+      chatPeerId!.isNotEmpty;
 }
+
+/// How a chat message must be handled. `blocked` means "signed in, but there is
+/// no server thread": the message is refused, never faked locally.
+enum ChatSendMode { localDemo, live, blocked }
 
 /// The jobs a contractor is shown as already having posted.
 const List<Job> kSeedContractorJobs = [
@@ -2137,6 +2150,25 @@ class AppState extends ChangeNotifier {
   static bool isSelfChat(String? peerId, String? myUid) =>
       myUid != null && peerId != null && peerId == myUid;
 
+  /// A live chat needs a signed-in user, a real other user (not me, not the
+  /// 'me' placeholder) and a job — direct, job-less chats are not supported.
+  static bool canOpenLiveChat({String? peerId, String? myUid, String? jobId}) =>
+      myUid != null &&
+      peerId != null &&
+      peerId.isNotEmpty &&
+      peerId != 'me' &&
+      !isSelfChat(peerId, myUid) &&
+      jobId != null &&
+      jobId.isNotEmpty;
+
+  /// Offline demo (no backend / not signed in) may use the local sample chat;
+  /// a signed-in user without a server thread must never get a fake one.
+  static ChatSendMode chatSendMode(
+          {required bool liveBackend, required bool hasThread}) =>
+      !liveBackend
+          ? ChatSendMode.localDemo
+          : (hasThread ? ChatSendMode.live : ChatSendMode.blocked);
+
   /// My own application for one specific job, if any — used to decide
   /// whether I may see the contractor's phone number for it yet. A worker can
   /// always message a contractor about a job; calling them is gated on this.
@@ -2510,7 +2542,8 @@ class AppState extends ChangeNotifier {
 
   Stream<List<ChatMessage>> messageFeed() {
     final api = backend;
-    if (api == null || _threadId == null) return Stream.value(chatThread);
+    if (api == null || uid == null) return Stream.value(chatThread);
+    if (_threadId == null) return Stream.value(const <ChatMessage>[]);
     return api.chat.watchMessages(_threadId!).map((docs) => docs.map((m) {
           final sent = m.sentAt;
           return ChatMessage(
@@ -2665,7 +2698,9 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Opens (or reuses) the thread between this user and [peerId].
+  /// Opens (or reuses) the thread between this user and [peerId] for [jobId].
+  /// Signed in, the chat screen opens only once the server thread exists — a
+  /// failed create shows an error instead of a chat that never delivers.
   Future<void> openChatLive({
     required String peerId,
     required String peerName,
@@ -2677,10 +2712,18 @@ class AppState extends ChangeNotifier {
     final id = api?.uid;
     // Never open a chat with yourself (e.g. Message on a job you posted).
     if (isSelfChat(peerId, id)) return;
-    openChat(jobId, peerId, back, peerName: peerName);
-    if (api == null || id == null) return;
+    if (api == null || id == null) {
+      // Offline demo: the local sample chat.
+      openChat(jobId, peerId, back, peerName: peerName);
+      return;
+    }
+    if (!canOpenLiveChat(peerId: peerId, myUid: id, jobId: jobId)) {
+      showToast(t['actionFailed']);
+      return;
+    }
+    _threadId = null;
     try {
-      _threadId = await api.chat.openThread(
+      final threadId = await api.chat.openThread(
         me: id,
         myName: displayName,
         other: peerId,
@@ -2688,18 +2731,33 @@ class AppState extends ChangeNotifier {
         jobId: jobId,
         jobTitle: jobTitle,
       );
-      await api.chat.markRead(_threadId!, id);
-      notifyListeners();
+      _threadId = threadId;
     } catch (_) {
       _threadId = null;
+      showToast(t['actionFailed']);
+      return;
     }
+    openChat(jobId, peerId, back, peerName: peerName);
+    try {
+      await api.chat.markRead(_threadId!, id);
+    } catch (_) {}
+    notifyListeners();
   }
 
   Future<void> sendChatLive(String text) async {
     final api = backend;
     final id = api?.uid;
-    if (api == null || id == null || _threadId == null) return sendChat(text);
-    if (text.trim().isEmpty) return;
+    switch (chatSendMode(
+        liveBackend: api != null && id != null, hasThread: _threadId != null)) {
+      case ChatSendMode.localDemo:
+        return sendChat(text);
+      case ChatSendMode.blocked:
+        showToast(t['actionFailed']);
+        return;
+      case ChatSendMode.live:
+        break;
+    }
+    if (api == null || id == null || text.trim().isEmpty) return;
     try {
       await api.chat.send(
         threadId: _threadId!,

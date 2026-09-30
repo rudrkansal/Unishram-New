@@ -391,7 +391,9 @@ class ContactSheet extends StatelessWidget {
                                 onTap: () => _dial(card.phone),
                               ),
                             ),
-                            const SizedBox(width: 10),
+                            // Send message only exists inside a job relationship.
+                            if (card.canChat) const SizedBox(width: 10),
+                            if (card.canChat)
                             Expanded(
                               child: Stack(
                                 clipBehavior: Clip.none,
@@ -402,7 +404,7 @@ class ContactSheet extends StatelessWidget {
                                       final back = app.screen;
                                       context.app.closeContact();
                                       context.app.openChatLive(
-                                        peerId: target.chatPeerId ?? 'me',
+                                        peerId: target.chatPeerId!,
                                         peerName: target.name,
                                         jobId: target.chatJobId,
                                         back: back,

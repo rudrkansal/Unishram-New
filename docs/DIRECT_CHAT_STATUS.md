@@ -1,22 +1,36 @@
-# Direct (Find-screen) chat — current behavior, decision pending
+# Direct (Find-screen) chat — REMOVED; chat is job-scoped only
 
-Status: **undecided product question. No rule or behavior change has been made.**
+Status: **direct chat is not a UniShram feature. Entry points removed and the fake-chat fallback eliminated.**
+(The product owner should confirm this reading; it is based on the evidence below and the instruction to remove
+the entry points if direct chat was not intended.)
 
-## What happens today
-- The Find screens (workers list, contractors list) open a Contact card whose "Send message" button calls
-  `AppState.openChatLive(...)` with `jobId: null` (`ContactTarget.chatJobId` is not set there;
-  `chatPeerId ?? 'me'` is used as the peer).
-- `ChatRepository.openThread` then writes `threads/{a_b}` with `jobId: null`.
-- `firestore.rules` (since commit `e8111d5`) only allows a thread create when `jobId` is a string, the caller has a
-  live application for it, and the other participant is the job's poster. A `jobId: null` thread is therefore **denied**
-  (emulator test S3 in `tests/security/security.test.js`).
-- `openChatLive` swallows the error and leaves `_threadId == null`; `sendChatLive` then falls back to the local-only
-  `sendChat`, which shows a seeded greeting (`chatSeedGreeting`) and messages that are **never delivered**.
+## Why it is treated as not intended
+- `docs/privacy_policy.md`: chat is "between users involved in a job" and messages are "visible to the other party
+  in a given job/application/chat".
+- `BUILD_PROGRESS.md`: "A labourer can message a contractor **about a job**"; messaging is wired into the job
+  detail screen and My Applications only.
+- `firestore.rules` (since `e8111d5`): a thread requires a `jobId`, a live application, and the job's poster as the
+  other participant. Direct threads were already denied (emulator test S3).
+- There is no inbox / thread list screen (`ChatRepository.watchThreads` is not used anywhere).
 
-## Consequence
-The Find-screen chat looks like it works but delivers nothing. 4 pre-`e8111d5` threads without a `jobId` exist in production.
+## What the problem was
+The Find-screen Contact card ("Send message") called `openChatLive` with `jobId: null`. The thread create was denied,
+the error was swallowed, `_threadId` stayed null, and `sendChatLive` fell back to the local-only sample chat
+(seeded greeting, messages never delivered).
 
-## Options (not chosen)
-- Allow direct chats: keep the Find screens working; adds unsolicited-contact surface (needs blocks, rate limits, reporting).
-- Disallow: keep the job-relationship guarantee; remove/change "Send message" on the Find screens and remove the silent
-  local-only fallback.
+## What changed
+- Find worker/contractor detail screens no longer pass `chatPeerId`; their Contact button is shown only when a
+  phone is actually available (offline sample data). Public profiles no longer surface other users' phones
+  (`toWorker()` / `toContractor()` return an empty phone).
+- Contact card: "Send message" is shown only for job-bound cards (`ContactTarget.canChat`); the `'me'` peer
+  placeholder fallback is gone.
+- `openChatLive`: signed in, the chat screen opens only after the server thread was created. Refused/failed ->
+  toast, no navigation. Job-less, self, `'me'` and empty peers are refused (`AppState.canOpenLiveChat`).
+- `sendChatLive`: signed in without a server thread -> `ChatSendMode.blocked` (toast), never the local fake chat.
+  Only the offline demo (no backend) may use the local sample chat.
+- `messageFeed`: signed in with no thread -> empty, not the seeded greeting.
+
+Tests: `test/direct_chat_test.dart` (14), emulator test S3 (`tests/security/security.test.js`).
+
+## Existing production data
+4 legacy threads without a `jobId` remain. They are not deleted or migrated (production untouched).

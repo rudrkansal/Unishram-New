@@ -66,7 +66,7 @@ extension UserDocView on UserDoc {
         [city, state].where((e) => e.isNotEmpty).join(', '),
         ratingAverage,
         expectedWage,
-        phone,
+        '', // other users' phones are private — never shown from a public profile
         available: availability == 'available',
       );
 
@@ -78,7 +78,7 @@ extension UserDocView on UserDoc {
         ratingCount == 0
             ? 'New'
             : '$ratingCount ${ratingCount == 1 ? 'review' : 'reviews'}',
-        phone,
+        '', // other users' phones are private — never shown from a public profile
       );
 
   String _experience() {

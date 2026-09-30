@@ -812,13 +812,16 @@ class WorkerDetail extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 24),
-        PrimaryButton(t['contact'],
-            onTap: () => context.app.openContact(ContactTarget(
-                  name: w.name,
-                  subtitle: '${w.skill} · ${w.location}',
-                  phone: w.phone,
-                  chatPeerId: w.id,
-                ))),
+        // No direct chat from the Find screens (chat is job-scoped), and other
+        // users' phones are not on public profiles — so Contact only appears
+        // where a phone is actually available (offline sample data).
+        if (w.phone.isNotEmpty)
+          PrimaryButton(t['contact'],
+              onTap: () => context.app.openContact(ContactTarget(
+                    name: w.name,
+                    subtitle: '${w.skill} · ${w.location}',
+                    phone: w.phone,
+                  ))),
         const SizedBox(height: 12),
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
