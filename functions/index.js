@@ -5,7 +5,7 @@
  * rating averages, suspensions, and the cascade that removes a user's data
  * when they delete their account.
  */
-const {onDocumentCreated, onDocumentUpdated} = require("firebase-functions/v2/firestore");
+const {onDocumentCreated, onDocumentUpdated, onDocumentDeleted} = require("firebase-functions/v2/firestore");
 const {onCall, onRequest, HttpsError} = require("firebase-functions/v2/https");
 const {onSchedule} = require("firebase-functions/v2/scheduler");
 const {setGlobalOptions} = require("firebase-functions/v2");
@@ -250,11 +250,14 @@ exports.revokeUserSession = onCall(async (request) => {
   const uid = request.auth && request.auth.uid;
   const targetUid = request.data.uid;
 
-  // Only admins can revoke other users' sessions
+  // Only the user themselves can revoke their own session
+  // (admins can revoke others only via Firebase CLI/Admin SDK, not client-callable)
   if (!uid) throw new HttpsError("unauthenticated", "Sign in first.");
   if (uid !== targetUid) {
-    // In production, check admin role from custom claims
-    // For now, allow self-revocation only
+    throw new HttpsError(
+      "permission-denied",
+      "You can only revoke your own session. Admin session revocation requires server-side authorization."
+    );
   }
 
   await db.collection("users").doc(targetUid).set(
@@ -300,6 +303,12 @@ exports.onReport = onDocumentCreated("reports/{reportId}", async (event) => {
     });
   }
 });
+
+// Import migration functions
+const migration = require('./migrate_contractor_phone');
+exports.migrateContractorPhone = migration.migrateContractorPhone;
+exports.verifyMigration = migration.verifyMigration;
+exports.cleanupContractorPhone = migration.cleanupContractorPhone;
 
 /**
  * Proxies India Post's free PIN-code directory server-side. India Post's API
