@@ -1326,6 +1326,7 @@ class AppState extends ChangeNotifier {
     if (api == null || id == null) return;
     final doc = await api.users.fetch(id);
     if (doc == null) return;
+    final ownPhone = await api.users.fetchOwnPhone(id, legacy: doc.phone);
     update(() {
       role = roleFromKey(doc.role) ?? role;
       lp.fullName = doc.fullName;
@@ -1346,7 +1347,7 @@ class AppState extends ChangeNotifier {
       lp.preferredWorkArea = doc.preferredWorkArea;
       lp.expectedWage = doc.expectedWage == 0 ? '' : '${doc.expectedWage}';
       lp.availability = doc.availability;
-      lp.mobileNumber = doc.phone.isEmpty ? lp.mobileNumber : doc.phone;
+      lp.mobileNumber = ownPhone.isEmpty ? lp.mobileNumber : ownPhone;
       lp.phoneVerified = doc.phoneVerified || lp.phoneVerified;
       lp.profilePicture =
           doc.photoUrl.isEmpty ? lp.profilePicture : doc.photoUrl;
@@ -2131,6 +2132,11 @@ class AppState extends ChangeNotifier {
   static bool isApprovedStatus(String status) =>
       status == 'shortlisted' || status == 'hired';
 
+  /// True when opening a chat would put the user in a thread with themselves
+  /// (Message on a job they posted, or a peer id equal to their own uid).
+  static bool isSelfChat(String? peerId, String? myUid) =>
+      myUid != null && peerId != null && peerId == myUid;
+
   /// My own application for one specific job, if any — used to decide
   /// whether I may see the contractor's phone number for it yet. A worker can
   /// always message a contractor about a job; calling them is gated on this.
@@ -2669,6 +2675,8 @@ class AppState extends ChangeNotifier {
   }) async {
     final api = backend;
     final id = api?.uid;
+    // Never open a chat with yourself (e.g. Message on a job you posted).
+    if (isSelfChat(peerId, id)) return;
     openChat(jobId, peerId, back, peerName: peerName);
     if (api == null || id == null) return;
     try {

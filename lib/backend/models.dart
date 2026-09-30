@@ -110,7 +110,8 @@ class UserDoc {
   Map<String, dynamic> toMap() => {
         'role': role,
         'fullName': fullName,
-        'phone': phone,
+        // 'phone' is deliberately NOT here: it is stored in users/{uid}/private/contact
+        // (see UserRepository.save) so other users cannot read it from the public profile.
         'gender': gender,
         'languagesSpoken': languagesSpoken,
         'city': city,

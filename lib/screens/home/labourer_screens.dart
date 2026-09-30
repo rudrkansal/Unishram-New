@@ -388,6 +388,8 @@ class LabourerJobDetail extends StatelessWidget {
                     // A worker can always message a contractor about a job;
                     // the phone number only appears once the contractor has
                     // shortlisted or hired them for it.
+                    // No Message / Contact on a job you posted yourself.
+                    if (job.contractorUid != app.uid)
                     StreamBuilder<ApplicationDoc?>(
                       stream: app.myApplicationForJob(job.id),
                       builder: (context, snapshot) {
@@ -668,6 +670,7 @@ class _ApplicationCard extends StatelessWidget {
                         },
                       ),
                     ],
+                    if (application.contractorId != app.uid)
                     TextButton(
                       onPressed: () => context.app.openChatLive(
                         peerId: application.contractorId,

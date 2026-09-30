@@ -1,0 +1,12 @@
+{
+  "name": "unishram-security-tests",
+  "private": true,
+  "description": "Emulator-only integration tests for firestore.rules and migration Cloud Functions.",
+  "scripts": {
+    "test": "cd ../.. && firebase emulators:exec --config firebase.emulator-test.json --only auth,firestore,functions --project demo-unishram-test \"node --test --test-force-exit --test-reporter=spec tests/security/security.test.js\""
+  },
+  "dependencies": {
+    "firebase": "^10.14.0",
+    "firebase-admin": "^12.6.0"
+  }
+}

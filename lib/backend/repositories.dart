@@ -129,10 +129,35 @@ class UserRepository {
 
   /// Creates on first write, merges afterwards, so an interrupted onboarding
   /// resumes instead of starting over.
-  Future<void> save(UserDoc user) => _users.doc(user.uid).set({
-        ...user.toMap(),
-        'createdAt': FieldValue.serverTimestamp(),
+  Future<void> save(UserDoc user) async {
+    final batch = _users.firestore.batch();
+    batch.set(_users.doc(user.uid), {
+      ...user.toMap(),
+      'createdAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    if (user.phone.isNotEmpty) {
+      batch.set(_privateContact(user.uid), {
+        'phone': user.phone,
+        'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+    }
+    await batch.commit();
+  }
+
+  DocumentReference<Map<String, dynamic>> _privateContact(String uid) =>
+      _users.doc(uid).collection('private').doc('contact');
+
+  /// The signed-in user's own phone number (owner-only document). Falls back
+  /// to a legacy profile field until that has been migrated. Only ever call
+  /// this for the current user — rules deny it for anyone else.
+  Future<String> fetchOwnPhone(String uid, {String legacy = ''}) async {
+    try {
+      final snap = await _privateContact(uid).get();
+      final phone = snap.data()?['phone'];
+      if (phone is String && phone.isNotEmpty) return phone;
+    } on FirebaseException catch (_) {}
+    return legacy;
+  }
 
   Future<void> patch(String uid, Map<String, dynamic> fields) =>
       _users.doc(uid).set({

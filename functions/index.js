@@ -10,6 +10,7 @@ const {onCall, onRequest, HttpsError} = require("firebase-functions/v2/https");
 const {onSchedule} = require("firebase-functions/v2/scheduler");
 const {setGlobalOptions} = require("firebase-functions/v2");
 const admin = require("firebase-admin");
+const {FieldValue, Timestamp} = require("firebase-admin/firestore");
 
 admin.initializeApp();
 setGlobalOptions({region: "asia-south1", maxInstances: 10});
@@ -55,7 +56,7 @@ exports.onApplication = onDocumentCreated("applications/{applicationId}", async 
   if (!app) return;
 
   const jobRef = db.collection("jobs").doc(app.jobId);
-  await jobRef.update({applicantCount: admin.firestore.FieldValue.increment(1)});
+  await jobRef.update({applicantCount: FieldValue.increment(1)});
 
   const jobSnap = await jobRef.get();
   const job = jobSnap.data() || {};
@@ -79,8 +80,8 @@ exports.onMessage = onDocumentCreated("threads/{threadId}/messages/{messageId}",
   if (!recipient) return;
 
   // Rate limiting: max 10 messages per minute per sender per thread
-  const now = admin.firestore.Timestamp.now();
-  const oneMinuteAgo = admin.firestore.Timestamp.fromMillis(now.toMillis() - 60000);
+  const now = Timestamp.now();
+  const oneMinuteAgo = Timestamp.fromMillis(now.toMillis() - 60000);
   const recentMessages = await db.collection("threads").doc(event.params.threadId)
       .collection("messages")
       .where("senderId", "==", message.senderId)
@@ -173,11 +174,14 @@ exports.onJobPosted = onDocumentCreated("jobs/{jobId}", async (event) => {
   if (job.postedBy) {
     const contractorDoc = await db.collection("users").doc(job.postedBy).get();
     const contractorData = contractorDoc.data() || {};
+    // The number lives in the owner-only private doc; the profile field is a legacy fallback.
+    const contactDoc = await db.collection("users").doc(job.postedBy).collection("private").doc("contact").get();
+    const contractorPhone = (contactDoc.exists && contactDoc.get("phone")) || contractorData.phone || '';
     await db.collection("contractorContacts").doc(event.params.jobId).set({
       contractorId: job.postedBy,
       contractorName: job.contractorName || contractorData.fullName || '',
-      contractorPhone: contractorData.phone || '',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      contractorPhone,
+      createdAt: FieldValue.serverTimestamp(),
     });
   }
 
@@ -186,7 +190,7 @@ exports.onJobPosted = onDocumentCreated("jobs/{jobId}", async (event) => {
   // client, so there is nothing for a client to forge.
   if (job.postedBy) {
     await db.collection("users").doc(job.postedBy).set(
-        {lastJobPostedAt: admin.firestore.FieldValue.serverTimestamp()},
+        {lastJobPostedAt: FieldValue.serverTimestamp()},
         {merge: true},
     );
   }
@@ -261,7 +265,7 @@ exports.revokeUserSession = onCall(async (request) => {
   }
 
   await db.collection("users").doc(targetUid).set(
-    {sessionRevoked: true, revokedAt: admin.firestore.FieldValue.serverTimestamp()},
+    {sessionRevoked: true, revokedAt: FieldValue.serverTimestamp()},
     {merge: true}
   );
 
@@ -286,7 +290,7 @@ exports.onReport = onDocumentCreated("reports/{reportId}", async (event) => {
   const aboutUserId = report.aboutUserId;
   if (!aboutUserId) return;
 
-  const cutoff = admin.firestore.Timestamp.fromMillis(
+  const cutoff = Timestamp.fromMillis(
       Date.now() - REPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000);
   const recent = await db.collection("reports")
       .where("aboutUserId", "==", aboutUserId)
@@ -358,7 +362,7 @@ exports.onJobDeleted = onDocumentDeleted("jobs/{jobId}", async (event) => {
 
 /** Closes jobs whose end date has passed, so the feed stays current. */
 exports.closeExpiredJobs = onSchedule("every day 02:00", async () => {
-  const now = admin.firestore.Timestamp.now();
+  const now = Timestamp.now();
   const snap = await db.collection("jobs")
       .where("status", "==", "open")
       .where("endDate", "<", now)

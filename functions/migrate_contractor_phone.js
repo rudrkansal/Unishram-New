@@ -16,6 +16,7 @@
 
 const {onCall, HttpsError} = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
+const {FieldValue} = require("firebase-admin/firestore");
 
 const db = admin.firestore();
 const MAX_BATCH_WRITES = 500; // Firestore batch limit
@@ -42,6 +43,9 @@ async function extractContractorData(jobDoc) {
       return null; // User not found
     }
     contractorData = userSnap.data();
+    // Phone now lives in the owner-only private doc; the profile field is a legacy fallback.
+    const contactSnap = await db.collection("users").doc(contractorId).collection("private").doc("contact").get();
+    if (contactSnap.exists && contactSnap.get("phone")) contractorData = {...contractorData, phone: contactSnap.get("phone")};
   } catch (error) {
     throw new Error(`Failed to fetch user ${contractorId}: ${error.message}`);
   }
@@ -102,7 +106,7 @@ async function migrateJob(jobId, jobDoc, batch, dryRun) {
       contractorId,
       contractorName,
       contractorPhone,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
     };
 
     if (!dryRun) {
