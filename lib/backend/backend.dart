@@ -8,11 +8,13 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:geoflutterfire_plus/geoflutterfire_plus.dart';
 
+import 'account_api.dart';
 import 'repositories.dart';
 
 /// One place the app talks to the server through. Screens never touch Firebase
 /// directly, so the data layer can be swapped or stubbed in tests.
 class Backend {
+  final AccountApi accounts;
   Backend({
     AuthRepository? auth,
     UserRepository? users,
@@ -25,7 +27,9 @@ class Backend {
     ReportRepository? reports,
     MinWageRepository? minWage,
     BlockRepository? blocks,
-  })  : auth = auth ?? AuthRepository(),
+    AccountApi? accounts,
+  })  : accounts = accounts ?? AccountApi(),
+        auth = auth ?? AuthRepository(),
         users = users ?? UserRepository(),
         jobs = jobs ?? JobRepository(),
         applications = applications ?? ApplicationRepository(),
@@ -108,7 +112,13 @@ class Backend {
 
   Future<void> deleteAccount() async {
     await unregisterPush();
-    // The callable removes every document and file before deleting the user.
-    await auth.deleteAccount();
+    // The deleteAccount Cloud Function removes every document and file and then the Auth user itself;
+    // FirebaseAuth.delete() alone would leave the user's data behind.
+    await accounts.deleteAccount();
+    try {
+      await auth.signOut();
+    } catch (_) {
+      // The Auth user is already gone server-side; clearing the local session is best-effort.
+    }
   }
 }

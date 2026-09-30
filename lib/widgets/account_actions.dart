@@ -112,9 +112,8 @@ class AccountActions extends StatelessWidget {
     try {
       await app.deleteAccount();
     } catch (_) {
-      // Firebase requires a recent sign-in before deletion; say so plainly
-      // rather than leaving the user staring at an unchanged screen.
-      app.showToast(app.t['deleteNeedsReauth']);
+      // Deletion runs server-side (no recent sign-in needed); a failure here is a network/server problem.
+      app.showToast(app.t['actionFailed']);
     }
   }
 }

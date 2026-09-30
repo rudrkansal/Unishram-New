@@ -22,13 +22,6 @@ service cloud.firestore {
     function isPlainText(value, maxLen) {
       return value is string && value.size() <= maxLen;
     }
-    // A moment between one job post and the next, stamped by the
-    // onJobPosted function (see the `jobs` create rule and `users.update`).
-    function notRateLimited() {
-      let last = get(/databases/$(database)/documents/users/$(request.auth.uid))
-          .data.get('lastJobPostedAt', null);
-      return last == null || request.time > last + duration.value(15, 's');
-    }
 
     // True if the other participant in this thread has blocked [sender] —
     // enforced here, not just filtered in the UI, so a blocked user genuinely
@@ -155,19 +148,9 @@ service cloud.firestore {
       // Contractor phone removed from public job document; fetch from contractorContacts instead
       allow read: if signedIn();
 
-      allow create: if signedIn()
-        && request.resource.data.postedBy == request.auth.uid
-        && isPlainText(request.resource.data.title, 300)
-        && isPlainText(request.resource.data.description, 2000)
-        && request.resource.data.wage is int
-        && request.resource.data.wage > 0
-        && request.resource.data.wage <= 100000
-        && request.resource.data.get('applicantCount', 0) == 0
-        && request.resource.data.status == 'open'
-        // A contractor's phone number is never stored on the public job; it
-        // lives in contractorContacts/{jobId}, written by onJobPosted.
-        && request.resource.data.get('contractorPhone', '') == ''
-        && notRateLimited();
+      // Jobs are created only by the `postJob` Cloud Function (Admin SDK), which validates the payload and
+      // enforces the post cooldown transactionally. Clients cannot create jobs directly.
+      allow create: if false;
 
       // The poster may edit their own job but never its applicant tally or postedBy.
       allow update: if signedIn()

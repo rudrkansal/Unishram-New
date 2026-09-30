@@ -7,6 +7,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:geoflutterfire_plus/geoflutterfire_plus.dart';
 
 import 'models.dart';
+import 'post_job_api.dart';
 
 typedef Snap = DocumentSnapshot<Map<String, dynamic>>;
 
@@ -278,14 +279,15 @@ class UserRepository {
 }
 
 class JobRepository {
-  JobRepository({FirebaseFirestore? db})
-      : _jobs = (db ?? FirebaseFirestore.instance).collection('jobs');
+  JobRepository({FirebaseFirestore? db, PostJobApi? postJobApi})
+      : _jobs = (db ?? FirebaseFirestore.instance).collection('jobs'),
+        _postJobApi = postJobApi ?? PostJobApi();
   final CollectionReference<Map<String, dynamic>> _jobs;
+  final PostJobApi _postJobApi;
 
-  Future<String> post(JobDoc job) async {
-    final ref = await _jobs.add(job.toMap());
-    return ref.id;
-  }
+  /// Jobs are created only through the `postJob` Cloud Function (firestore.rules deny
+  /// client creates); it validates the payload and enforces the post cooldown.
+  Future<String> post(JobDoc job) => _postJobApi.post(job);
 
   Future<void> close(String jobId) =>
       _jobs.doc(jobId).update({'status': 'closed'});

@@ -47,10 +47,23 @@ async function code(promise) {
 const expectDenied = async (p) => assert.equal(await code(p), "permission-denied");
 const expectOk = async (p) => assert.equal(await code(p), "ok");
 
+// Jobs can only be created by the postJob Cloud Function (rules: `allow create: if false`).
+const callCode = async (client, fn, data) => { try { await httpsCallable(client.functions, fn)(data); return "ok"; } catch (e) { return e.code || String(e); } };
+const waitFor = async (fn, ms = 15000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await fn()) return true; await new Promise((r) => setTimeout(r, 250)); } return false; };
+const validJob = (extra = {}) => ({title: "Test job", description: "d", wage: 500, ...extra});
+async function postJobOk(client, extra = {}) {
+  const res = await httpsCallable(client.functions, "postJob")(validJob(extra));
+  assert.ok(res.data.jobId, "postJob should return a jobId");
+  return res.data.jobId;
+}
+// Test-fixture job created with the Admin SDK (as a server would). Still fires the real onJobPosted trigger.
+const seedJob = (id, postedBy, extra = {}) => admin.firestore().doc(`jobs/${id}`).set({
+  postedBy, title: "t", description: "d", wage: 500, status: "open", applicantCount: 0, ...extra});
+
 let jobId, threadId;
 
 before(async () => {
-  for (const n of ["contractor", "worker", "stranger", "nonadmin", "admin", "withdrawn", "rejected", "shortlisted", "forger", "turnedDown", "newapp", "profile", "profile2", "poster", "rpost1", "rpost2", "phoneOwner", "phoneOther", "delUser", "selfPoster", "selfApplicant", "cpA", "cpB", "trigContractor", "trigW1", "trigW2", "trigOther"]) clients[n] = await makeClient(n);
+  for (const n of ["contractor", "worker", "stranger", "nonadmin", "admin", "withdrawn", "rejected", "shortlisted", "forger", "turnedDown", "newapp", "profile", "profile2", "poster", "rpost1", "rpost2", "phoneOwner", "phoneOther", "delUser", "delFull", "selfPoster", "selfApplicant", "cpA", "cpB", "pjNoUser", "pjSusp", "pjBurst", "pjIndepA", "pjIndepB", "pjVal", "pjGeo", "trigContractor", "trigW1", "trigW2", "trigOther"]) clients[n] = await makeClient(n);
   clients.anon = await makeClient("anon", {signIn: false});
   await admin.auth().setCustomUserClaims(clients.admin.uid, {admin: true});
   await clients.admin.auth.currentUser.getIdToken(true); // pick up the claim
@@ -62,10 +75,8 @@ before(async () => {
   }
   // Test job (contractor) and application (worker) through the real rules.
   jobId = `job-${run}`;
-  await setDoc(doc(clients.contractor.db, "jobs", jobId), {
-    postedBy: clients.contractor.uid, title: "Test job", description: "emulator only",
-    wage: 500, status: "open", applicantCount: 0,
-  });
+  await seedJob(jobId, clients.contractor.uid, {title: "Test job", description: "emulator only"});
+
   await setDoc(doc(clients.worker.db, "applications", `${jobId}_${clients.worker.uid}`), {
     jobId, workerId: clients.worker.uid, contractorId: clients.contractor.uid, status: "pending",
   });
@@ -335,11 +346,9 @@ describe("Firestore rules: users / jobs protected-field regression", () => {
     }
     await admin.firestore().doc(`users/${clients.profile.uid}`).update({suspended: true, ratingAverage: 4, ratingCount: 3});
     await admin.firestore().doc(`users/${clients.profile2.uid}`).update({suspended: false, ratingAverage: 4, ratingCount: 3});
-    // One poster per job: the real onJobPosted trigger now enforces the 15s post cooldown per user.
     for (const [j, n] of [["pj-del", "rpost1"], ["pj-edit", "rpost2"]]) {
       await setDoc(doc(clients[n].db, "users", clients[n].uid), {role: "contractor", fullName: n});
-      await setDoc(doc(clients[n].db, "jobs", `${j}-${run}`), {
-        postedBy: clients[n].uid, title: "t", description: "d", wage: 500, status: "open", applicantCount: 0});
+      await seedJob(`${j}-${run}`, clients[n].uid);
     }
   });
 
@@ -378,18 +387,14 @@ describe("Firestore rules: users / jobs protected-field regression", () => {
 });
 
 describe("Firestore rules: applicantCount / lastJobPostedAt regression + rate limit", () => {
-  const jobBody = (uid, extra = {}) => ({postedBy: uid, title: "t", description: "d", wage: 500, status: "open", applicantCount: 0, ...extra});
-  const waitFor = async (fn, ms = 15000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await fn()) return true; await new Promise((r) => setTimeout(r, 250)); } return false; };
   let ratedJob;
 
   before(async () => {
     await setDoc(doc(clients.poster.db, "users", clients.poster.uid), {role: "contractor", fullName: "Poster"});
-    ratedJob = `rl-${run}`;
-    // First post: no lastJobPostedAt yet -> allowed by the client rules.
-    await setDoc(doc(clients.poster.db, "jobs", ratedJob), jobBody(clients.poster.uid));
-    // The REAL onJobPosted trigger stamps the cooldown; wait for it (Admin SDK is read-only here).
-    const stamped = await waitFor(async () => (await admin.firestore().doc(`users/${clients.poster.uid}`).get()).get("lastJobPostedAt"));
-    assert.ok(stamped, "onJobPosted should have stamped lastJobPostedAt");
+    // First post goes through the real callable; it stamps lastJobPostedAt atomically with the job.
+    ratedJob = await postJobOk(clients.poster);
+    const stamped = (await admin.firestore().doc(`users/${clients.poster.uid}`).get()).get("lastJobPostedAt");
+    assert.ok(stamped, "postJob should have stamped lastJobPostedAt in the same transaction");
   });
 
   test("L1. jobs.applicantCount deletion -> denied", async () => {
@@ -425,15 +430,15 @@ describe("Firestore rules: applicantCount / lastJobPostedAt regression + rate li
     await expectOk(updateDoc(u, {fullName: "Poster Renamed", city: "Delhi"}));
     await expectOk(setDoc(u, {language: "hi"}, {merge: true}));
   });
-  test("L7. rate limit: immediate 2nd post denied; cooldown reset by server only; then allowed", async () => {
+  test("L7. rate limit: 2nd post refused; client cannot bypass by direct create or by touching the stamp; server clock elapse -> allowed", async () => {
     const c = clients.poster;
-    await expectDenied(setDoc(doc(c.db, "jobs", `rl2-${run}`), jobBody(c.uid)));
-    // client cannot bypass by deleting / rewriting the stamp, then posting
+    assert.equal(await callCode(c, "postJob", validJob()), "functions/resource-exhausted");
+    await expectDenied(setDoc(doc(c.db, "jobs", `rl2-${run}`), {postedBy: c.uid, title: "t", description: "d", wage: 500, status: "open", applicantCount: 0}));
     await expectDenied(updateDoc(doc(c.db, "users", c.uid), {lastJobPostedAt: deleteField()}));
-    await expectDenied(setDoc(doc(c.db, "jobs", `rl3-${run}`), jobBody(c.uid)));
+    assert.equal(await callCode(c, "postJob", validJob()), "functions/resource-exhausted");
     // Simulate the 15s cooldown elapsing by back-dating the stamp (Admin SDK) -> allowed again
     await admin.firestore().doc(`users/${c.uid}`).update({lastJobPostedAt: new Date(Date.now() - 60000)});
-    await expectOk(setDoc(doc(c.db, "jobs", `rl4-${run}`), jobBody(c.uid)));
+    assert.equal(await callCode(c, "postJob", validJob()), "ok");
   });
 });
 
@@ -450,18 +455,16 @@ describe("Cloud Function triggers (real): onJobPosted / onApplication", () => {
     // Phone is stored where the app stores it: the owner-only private doc, NOT the public profile.
     await setDoc(doc(c.db, "users", c.uid), {role: "contractor", fullName: "Trig Contractor"});
     await setDoc(doc(c.db, "users", c.uid, "private", "contact"), {phone: PHONE});
-    tj = `tj-${run}`;
   });
 
-  test("T1. onJobPosted: job create succeeds; wage flags written; lastJobPostedAt stamped by the function", async () => {
+  test("T1. postJob + real onJobPosted: job created; wage flags written by the trigger; lastJobPostedAt stamped by the callable", async () => {
     const c = clients.trigContractor;
-    await expectOk(setDoc(doc(c.db, "jobs", tj), {postedBy: c.uid, title: "Trigger job", description: "d", wage: 100,
-      status: "open", applicantCount: 0, state: "Maharashtra", skill: "Helper"}));
+    tj = await postJobOk(c, {title: "Trigger job", wage: 100, state: "Maharashtra", skill: "Helper"});
     const job = await poll(async () => { const d = await adb().doc(`jobs/${tj}`).get(); return d.get("minWageAtPost") !== undefined ? d : null; });
     assert.ok(job, "onJobPosted should set minWageAtPost");
     assert.equal(job.get("belowMinimumWage"), true);
-    const user = await poll(async () => { const d = await adb().doc(`users/${c.uid}`).get(); return d.get("lastJobPostedAt") ? d : null; });
-    assert.ok(user, "onJobPosted should stamp users/{uid}.lastJobPostedAt");
+    const user = await adb().doc(`users/${c.uid}`).get();
+    assert.ok(user.get("lastJobPostedAt"), "postJob should have stamped users/{uid}.lastJobPostedAt");
   });
 
   test("T2. onJobPosted: contractorContacts/{jobId} created with the phone, and the public job doc exposes no phone", async () => {
@@ -486,9 +489,8 @@ describe("Cloud Function triggers (real): onJobPosted / onApplication", () => {
     await expectDenied(setDoc(doc(trigOther.db, "contractorContacts", `new-${run}`), {contractorId: trigOther.uid}));
   });
 
-  test("T4. onJobPosted stamp is live: immediate second post is rate-limited by the real stamp", async () => {
-    const c = clients.trigContractor;
-    await expectDenied(setDoc(doc(c.db, "jobs", `tj2-${run}`), {postedBy: c.uid, title: "t", description: "d", wage: 500, status: "open", applicantCount: 0}));
+  test("T4. the callable's stamp is live: immediate second post is refused", async () => {
+    assert.equal(await callCode(clients.trigContractor, "postJob", validJob()), "functions/resource-exhausted");
   });
 
   test("T5. onApplication: valid applications create; applicantCount increments 0 -> 1 -> 2", async () => {
@@ -594,8 +596,7 @@ describe("Phone privacy: users/{uid}/private/contact", () => {
   test("P8. job doc holds no phone; contractorContacts stays protected and gated by application status", async () => {
     const {phoneOwner: o, stranger, newapp, shortlisted, trigContractor} = clients;
     // Real job + real trigger (phone taken from o's private doc)
-    contractorJob = `pj-phone-${run}`;
-    await setDoc(doc(o.db, "jobs", contractorJob), {postedBy: o.uid, title: "t", description: "d", wage: 500, status: "open", applicantCount: 0});
+    await postJobOk(o).then((id) => { contractorJob = id; });
     const cc = await (async () => { for (let i = 0; i < 80; i++) { const d = await admin.firestore().doc(`contractorContacts/${contractorJob}`).get(); if (d.exists) return d; await new Promise((r) => setTimeout(r, 250)); } })();
     assert.ok(cc, "contractorContacts created by trigger");
     assert.equal(cc.get("contractorPhone"), PH);
@@ -623,6 +624,36 @@ describe("Phone privacy: users/{uid}/private/contact", () => {
     assert.equal((await admin.firestore().doc(`users/${d.uid}/private/contact`).get()).exists, false);
     assert.equal((await admin.firestore().doc(`users/${d.uid}`).get()).exists, false);
   });
+  test("P9b. deleteAccount end-to-end: profile, private phone, tokens, jobs (+ contractorContacts), applications, listings and the Auth user are all removed; other users' data is untouched", async () => {
+    const d = clients.delFull, other = clients.phoneOther;
+    const a = admin.firestore();
+    await setDoc(prof(d), {role: "contractor", fullName: "Delete me"});
+    await setDoc(priv(d), {phone: "+914444400001", updatedAt: serverTimestamp()});
+    await setDoc(doc(d.db, "users", d.uid, "tokens", "tok1"), {at: serverTimestamp()});
+    await setDoc(doc(d.db, "listings", `del-listing-${run}`), {vendorId: d.uid, item: "Cement", price: 100});
+    const myJob = await postJobOk(d);                                         // real job -> real onJobPosted -> contractorContacts
+    await waitFor(async () => (await a.doc(`contractorContacts/${myJob}`).get()).exists);
+    await seedJob(`del-other-job-${run}`, other.uid);                         // someone else's job that the user applies to
+    await setDoc(doc(d.db, "applications", `del-other-job-${run}_${d.uid}`), {jobId: `del-other-job-${run}`, workerId: d.uid, contractorId: other.uid, status: "pending"});
+    await setDoc(doc(other.db, "listings", `keep-listing-${run}`), {vendorId: other.uid, item: "Bricks", price: 50});
+
+    await httpsCallable(d.functions, "deleteAccount")({});
+
+    const gone = async (path) => !(await a.doc(path).get()).exists;
+    assert.ok(await gone(`users/${d.uid}`), "profile removed");
+    assert.ok(await gone(`users/${d.uid}/private/contact`), "private phone removed");
+    assert.ok(await gone(`users/${d.uid}/tokens/tok1`), "push token removed");
+    assert.ok(await gone(`listings/del-listing-${run}`), "listing removed");
+    assert.ok(await gone(`jobs/${myJob}`), "posted job removed");
+    assert.ok(await gone(`applications/del-other-job-${run}_${d.uid}`), "application removed");
+    assert.ok(await waitFor(async () => gone(`contractorContacts/${myJob}`)), "contractorContacts (the phone copy) removed by onJobDeleted");
+    await assert.rejects(admin.auth().getUser(d.uid), (e) => e.code === "auth/user-not-found", "Auth user deleted");
+    assert.ok(!(await gone(`listings/keep-listing-${run}`)), "another user's listing untouched");
+    assert.ok(!(await gone(`jobs/del-other-job-${run}`)), "another user's job untouched");
+    // the deleted user's old session can no longer act
+    assert.notEqual(await callCode(d, "postJob", validJob()), "ok");
+  });
+
   test("P10. legacy-phone migration script: dry-run changes nothing; --apply moves the phone; idempotent; conflicts left alone", async () => {
     const a = admin.firestore(); const id1 = `mig1-${run}`, id2 = `mig2-${run}`, id3 = `mig3-${run}`;
     await a.doc(`users/${id1}`).set({role: "labourer", fullName: "Legacy", phone: "+915550001"});
@@ -681,7 +712,7 @@ describe("Production-finding reproductions against the CURRENT local rules", () 
     const c = clients.selfPoster;
     await setDoc(doc(c.db, "users", c.uid), {role: "contractor", fullName: "Self poster"});
     selfJob = `self-${run}`;
-    await setDoc(doc(c.db, "jobs", selfJob), {postedBy: c.uid, title: "t", description: "d", wage: 500, status: "open", applicantCount: 0});
+    await seedJob(selfJob, c.uid);
   });
   test("S1. poster opening a thread with THEMSELVES (participants [X,X]) on own job -> denied, even after applying to own job", async () => {
     const c = clients.selfPoster;
@@ -702,28 +733,36 @@ describe("Production-finding reproductions against the CURRENT local rules", () 
     // The app's own openThread(merge:true) shape, jobId null:
     await expectDenied(setDoc(doc(c.db, "threads", ids("d")[0]), {participants: [c.uid, w.uid], names: {}, jobId: null, jobTitle: "", updatedAt: serverTimestamp()}, {merge: true}));
   });
-  test("S4. contractorPhone on public jobs: non-empty denied on create and update; absent/empty valid; legacy value tolerated but not editable", async () => {
+  test("S4. contractorPhone on public jobs: no client can create a job at all; the callable stores no phone; updates cannot add/change one", async () => {
     const {cpA: a, cpB: b} = clients;
     for (const c of [a, b]) await setDoc(doc(c.db, "users", c.uid), {role: "contractor", fullName: "cp"});
     const base = (c, extra = {}) => ({postedBy: c.uid, title: "t", description: "d", wage: 500, status: "open", applicantCount: 0, ...extra});
-    // create: non-empty denied (incl. whitespace and non-string), several attempts do not trip the cooldown (nothing is created)
-    for (const bad of ["+919000000000", " ", "x", 9000000000, null]) {
-      await expectDenied(setDoc(doc(a.db, "jobs", `cp-bad-${run}`), base(a, {contractorPhone: bad})));
+    // direct client creates are denied outright (with or without a phone)
+    for (const extra of [{}, {contractorPhone: ""}, {contractorPhone: "+919000000000"}]) {
+      await expectDenied(setDoc(doc(a.db, "jobs", `cp-direct-${run}`), base(a, extra)));
     }
-    // create: absent (user a) and empty string (user b) are valid
-    await expectOk(setDoc(doc(a.db, "jobs", `cp-absent-${run}`), base(a)));
-    await expectOk(setDoc(doc(b.db, "jobs", `cp-empty-${run}`), base(b, {contractorPhone: ""})));
-    // update: setting / changing to non-empty denied; from empty to non-empty denied
-    for (const [id, c] of [[`cp-absent-${run}`, a], [`cp-empty-${run}`, b]]) {
-      const r = doc(c.db, "jobs", id);
+    // the callable ignores client-supplied server-owned fields, including any phone
+    const id = await postJobOk(a, {contractorPhone: "+919000000000", postedBy: b.uid, status: "closed", applicantCount: 9, contractorName: "Spoof"});
+    const stored = (await admin.firestore().doc(`jobs/${id}`).get()).data();
+    assert.equal(stored.postedBy, a.uid);
+    assert.equal(stored.status, "open");
+    assert.equal(stored.applicantCount, 0);
+    assert.equal(stored.contractorName, "cp");
+    assert.equal(Object.keys(stored).some((k) => /phone/i.test(k)), false);
+    assert.equal(JSON.stringify(stored).includes("+919000000000"), false);
+    // update: setting / changing to non-empty denied; empty ok (jobs seeded as a server would)
+    await seedJob(`cp-absent-${run}`, a.uid);
+    await seedJob(`cp-empty-${run}`, b.uid, {contractorPhone: ""});
+    for (const [jid, c] of [[`cp-absent-${run}`, a], [`cp-empty-${run}`, b]]) {
+      const r = doc(c.db, "jobs", jid);
       await expectDenied(updateDoc(r, {contractorPhone: "+919000000000"}));
       await expectDenied(setDoc(r, {contractorPhone: "+919000000000"}, {merge: true}));
       await expectOk(updateDoc(r, {title: "still editable", contractorPhone: ""}));
       await expectOk(updateDoc(r, {wage: 600}));
     }
-    // legacy job that already has a phone (as the 9 production jobs do): unrelated edits and removal allowed, changing it is not
+    // legacy job that already has a phone (as the 9 production jobs do)
     const legacy = `cp-legacy-${run}`;
-    await admin.firestore().doc(`jobs/${legacy}`).set(base(a, {contractorPhone: "+919111111111"}));
+    await seedJob(legacy, a.uid, {contractorPhone: "+919111111111"});
     const lr = doc(a.db, "jobs", legacy);
     await expectDenied(updateDoc(lr, {contractorPhone: "+919222222222"}));
     await expectOk(updateDoc(lr, {title: "legacy edit keeps phone"}));
@@ -734,6 +773,135 @@ describe("Production-finding reproductions against the CURRENT local rules", () 
     const w = clients.selfApplicant, other = clients.stranger;
     await expectDenied(setDoc(doc(w.db, "applications", `${selfJob}_${w.uid}x`), {jobId: selfJob, workerId: w.uid, contractorId: other.uid, status: "pending"}));
     await expectDenied(updateDoc(doc(w.db, "applications", `${selfJob}_${w.uid}`), {status: "withdrawn", contractorId: other.uid}));
+  });
+});
+
+describe("postJob callable (the only job-creation path) — rate limit, validation, server-owned fields", () => {
+  const { _test: pj } = require("../../functions/post_job");
+  const mkUser = (c, extra = {}) => setDoc(doc(c.db, "users", c.uid), {role: "contractor", fullName: `Name ${c.uid.slice(0, 4)}`, ...extra});
+  const jobsBy = async (uid) => (await admin.firestore().collection("jobs").where("postedBy", "==", uid).get()).size;
+
+  test("J1. unauthenticated -> unauthenticated", async () => {
+    assert.equal(await callCode(clients.anon, "postJob", validJob()), "functions/unauthenticated");
+  });
+  test("J2. signed in but no profile -> failed-precondition; nothing created", async () => {
+    assert.equal(await callCode(clients.pjNoUser, "postJob", validJob()), "functions/failed-precondition");
+    assert.equal(await jobsBy(clients.pjNoUser.uid), 0);
+  });
+  test("J3. suspended account -> permission-denied; nothing created", async () => {
+    await mkUser(clients.pjSusp);
+    await admin.firestore().doc(`users/${clients.pjSusp.uid}`).update({suspended: true});
+    assert.equal(await callCode(clients.pjSusp, "postJob", validJob()), "functions/permission-denied");
+    assert.equal(await jobsBy(clients.pjSusp.uid), 0);
+  });
+
+  test("J4. validation: bad payloads are rejected with invalid-argument and do NOT consume the cooldown", async () => {
+    const c = clients.pjVal;
+    await mkUser(c, {businessName: "Val Builders"});
+    const bads = [
+      undefined, null, "text", [], {},
+      validJob({title: ""}), validJob({title: "   "}), validJob({title: "x".repeat(301)}), validJob({title: 42}),
+      validJob({description: "x".repeat(2001)}), validJob({skill: "x".repeat(101)}), validJob({pincode: "1".repeat(11)}),
+      validJob({wage: 0}), validJob({wage: -5}), validJob({wage: 100001}), validJob({wage: 1.5}), validJob({wage: "500"}), validJob({wage: null}),
+      (() => { const j = validJob(); delete j.wage; return j; })(),
+      validJob({workersNeeded: 0}), validJob({workersNeeded: 1001}), validJob({workersNeeded: 2.5}),
+      validJob({hoursPerDay: 25}), validJob({hoursPerDay: -1}),
+      validJob({startDate: "garbage"}), validJob({startDate: 5}), validJob({startDate: "2026-10-10", endDate: "2026-10-01"}),
+      validJob({location: {latitude: 91, longitude: 0}}), validJob({location: {latitude: 0, longitude: 181}}),
+      validJob({location: {latitude: "1", longitude: 2}}), validJob({location: {latitude: 1}}), validJob({location: "here"}),
+    ];
+    for (const [i, b] of bads.entries()) {
+      assert.equal(await callCode(c, "postJob", b), "functions/invalid-argument", `bad payload #${i}: ${JSON.stringify(b)?.slice(0, 80)}`);
+    }
+    assert.equal(await jobsBy(c.uid), 0);
+    // ...and a good one still works immediately afterwards (no cooldown was consumed by the rejections)
+    assert.equal(await callCode(c, "postJob", validJob({title: "  Trimmed title  "})), "ok");
+    assert.equal(await jobsBy(c.uid), 1);
+  });
+
+  test("J5. server-owned fields: postedBy/contractorName/status/applicantCount/createdAt decided by the server; extra client fields ignored", async () => {
+    const c = clients.pjVal;
+    await admin.firestore().doc(`users/${c.uid}`).update({lastJobPostedAt: new Date(Date.now() - 60000)});
+    const id = await postJobOk(c, {postedBy: clients.stranger.uid, status: "filled", applicantCount: 50, contractorName: "Spoof",
+      contractorPhone: "+919000000000", minWageAtPost: 1, createdAt: "2000-01-01", isAdmin: true, geohash: "evil", suspended: false});
+    const j = (await admin.firestore().doc(`jobs/${id}`).get()).data();
+    assert.equal(j.postedBy, c.uid);
+    assert.equal(j.contractorName, "Val Builders");
+    assert.equal(j.status, "open");
+    assert.equal(j.applicantCount, 0);
+    assert.equal(j.geohash, "");
+    assert.ok(j.createdAt && typeof j.createdAt.toDate === "function" && j.createdAt.toDate().getFullYear() >= 2026, "createdAt is a server timestamp");
+    for (const k of ["contractorPhone", "isAdmin", "suspended"]) assert.equal(k in j, false, `${k} must not be stored`);
+    assert.notEqual(j.minWageAtPost, 1, "minWageAtPost comes from the trigger, not the client");
+    assert.equal(j.title, "Test job");
+  });
+
+  test("J6. dates and location are stored as Timestamps / GeoPoint with a geo field the app's nearby query can use", async () => {
+    const c = clients.pjGeo;
+    await mkUser(c);
+    const id = await postJobOk(c, {location: {latitude: 28.6139, longitude: 77.2090}, startDate: "2026-10-05T00:00:00.000Z", endDate: "2026-10-09T00:00:00.000Z", hoursPerDay: 8, workersNeeded: 3});
+    const j = (await admin.firestore().doc(`jobs/${id}`).get()).data();
+    assert.equal(j.location.latitude, 28.6139);
+    assert.equal(j.geo.geohash, "ttnfucjbh");
+    assert.equal(j.geo.geopoint.latitude, 28.6139);
+    assert.equal(j.startDate.toDate().toISOString(), "2026-10-05T00:00:00.000Z");
+    assert.equal(j.endDate.toDate().toISOString(), "2026-10-09T00:00:00.000Z");
+    assert.equal(j.workersNeeded, 3);
+    assert.equal(j.hoursPerDay, 8);
+  });
+
+  test("J7. server geohash == the app's GeoFirePoint.geohash (values generated by the Dart package)", () => {
+    const cases = [[28.6139, 77.209, "ttnfucjbh"], [19.076, 72.8777, "te7ud2evv"], [13.0827, 80.2707, "tf346tek6"], [0, 0, "7zzzzzzzz"],
+      [-33.8688, 151.2093, "r3gx2f77b"], [89.9999, 179.9999, "zzzzzzzzm"], [-90, -180, "000000000"], [90, 180, "zzzzzzzzz"],
+      [26.9124, 75.7873, "tsvche68h"], [-0.0001, -0.0001, "7zzzzzzzm"]];
+    for (const [lat, lng, want] of cases) assert.equal(pj.encodeGeohash(lat, lng), want, `${lat},${lng}`);
+  });
+
+  test("J8. BURST: 8 parallel posts by one user -> exactly 1 job created, 7 refused (this used to accept all 8)", async () => {
+    const c = clients.pjBurst;
+    await mkUser(c);
+    const res = await Promise.all(Array.from({length: 8}, () => callCode(c, "postJob", validJob())));
+    assert.equal(res.filter((r) => r === "ok").length, 1, JSON.stringify(res));
+    assert.equal(res.filter((r) => r === "functions/resource-exhausted").length, 7, JSON.stringify(res));
+    assert.equal(await jobsBy(c.uid), 1);
+  });
+
+  test("J9. cooldown is per user: two users posting in parallel both succeed", async () => {
+    const {pjIndepA: a, pjIndepB: b} = clients;
+    await mkUser(a); await mkUser(b);
+    const res = await Promise.all([callCode(a, "postJob", validJob()), callCode(b, "postJob", validJob())]);
+    assert.deepEqual(res, ["ok", "ok"]);
+  });
+
+  test("J10. refusal carries retryAfterSeconds (1..15); the cooldown boundary is 15s on the server clock", async () => {
+    const c = clients.pjIndepA;
+    try { await httpsCallable(c.functions, "postJob")(validJob()); assert.fail("should be refused"); }
+    catch (e) {
+      assert.equal(e.code, "functions/resource-exhausted");
+      assert.ok(e.details && e.details.retryAfterSeconds >= 1 && e.details.retryAfterSeconds <= 15, JSON.stringify(e.details));
+    }
+    const ref = admin.firestore().doc(`users/${c.uid}`);
+    await ref.update({lastJobPostedAt: new Date(Date.now() - 12000)});
+    assert.equal(await callCode(c, "postJob", validJob()), "functions/resource-exhausted");   // 12s ago: still cooling down
+    await ref.update({lastJobPostedAt: new Date(Date.now() - 16000)});
+    assert.equal(await callCode(c, "postJob", validJob()), "ok");                             // 16s ago: allowed
+  });
+
+  test("J11. direct client job create is denied for everyone, even a valid body from a user who never posted", async () => {
+    const c = clients.pjNoUser;
+    await mkUser(c);
+    await expectDenied(setDoc(doc(c.db, "jobs", `direct-${run}`), {postedBy: c.uid, title: "t", description: "d", wage: 500, status: "open", applicantCount: 0}));
+    await expectDenied(setDoc(doc(clients.anon.db, "jobs", `direct-anon-${run}`), {postedBy: "x", title: "t", description: "d", wage: 500, status: "open", applicantCount: 0}));
+  });
+
+  test("J12. jobs made by the callable still get the trigger's wage flags and a protected contractorContacts doc", async () => {
+    const c = clients.pjGeo;
+    await admin.firestore().doc(`users/${c.uid}`).update({lastJobPostedAt: new Date(Date.now() - 60000)});
+    const id = await postJobOk(c, {wage: 100, state: "Maharashtra", skill: "Helper"});
+    let j; for (let i = 0; i < 80 && !(j = (await admin.firestore().doc(`jobs/${id}`).get())).get("minWageAtPost"); i++) await new Promise((r) => setTimeout(r, 250));
+    assert.equal(j.get("belowMinimumWage"), true);
+    let cc; for (let i = 0; i < 80 && !(cc = await admin.firestore().doc(`contractorContacts/${id}`).get()).exists; i++) await new Promise((r) => setTimeout(r, 250));
+    assert.equal(cc.get("contractorId"), c.uid);
   });
 });
 

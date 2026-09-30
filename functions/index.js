@@ -185,15 +185,8 @@ exports.onJobPosted = onDocumentCreated("jobs/{jobId}", async (event) => {
     });
   }
 
-  // Starts the cooldown the `jobs` create rule enforces (see
-  // `notRateLimited()` in firestore.rules) — stamped here, not by the
-  // client, so there is nothing for a client to forge.
-  if (job.postedBy) {
-    await db.collection("users").doc(job.postedBy).set(
-        {lastJobPostedAt: FieldValue.serverTimestamp()},
-        {merge: true},
-    );
-  }
+  // The post cooldown (users/{uid}.lastJobPostedAt) is stamped by the `postJob` callable, atomically with the
+  // job create — not here — so parallel posts cannot slip through before an asynchronous trigger runs.
 });
 
 /** Keeps a user's rating average honest — clients never write it. */
@@ -312,6 +305,7 @@ exports.onReport = onDocumentCreated("reports/{reportId}", async (event) => {
 const migration = require('./migrate_contractor_phone');
 exports.migrateContractorPhone = migration.migrateContractorPhone;
 exports.verifyMigration = migration.verifyMigration;
+exports.postJob = require("./post_job").postJob;
 exports.cleanupContractorPhone = migration.cleanupContractorPhone;
 
 /**
