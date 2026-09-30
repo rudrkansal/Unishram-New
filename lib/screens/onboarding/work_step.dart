@@ -507,6 +507,11 @@ class PhoneVerificationBlock extends StatelessWidget {
                     app.otpSentAt = null;
                     app.otpResendCount = 0; // Reset resend counter for new number
                   }
+                  // A Firebase throttle is tied to the number it actually
+                  // saw — switching to a different number must never carry
+                  // a phantom cooldown over onto it.
+                  app.otpSendThrottledUntil = null;
+                  app.otpVerifyThrottledUntil = null;
                 }),
               ),
             ),
@@ -533,16 +538,12 @@ class PhoneVerificationBlock extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              _SideButton(
-                label: t['verify'],
-                enabled: app.otpCode.length == 6 && !app.otpSending,
-                onTap: () => context.app.verifyOtp(),
-              ),
+              _VerifyOtpButton(app: app, t: t),
             ],
           ),
           const SizedBox(height: 7),
           Text(
-            app.online ? t['otpSentHint'] : t['otpHintDemo'],
+            t['otpSentHint'],
             style: const TextStyle(fontSize: 11.5, color: C.mutedSoft),
           ),
         ],
@@ -617,11 +618,13 @@ class _ResendOtpButtonState extends State<_ResendOtpButton> {
   }
 
   void _syncTimer() {
-    final active = widget.app.otpResendSecondsLeft > 0;
+    final active = widget.app.otpResendSecondsLeft > 0 ||
+        widget.app.otpSendThrottleSecondsLeft > 0;
     if (active && _timer == null) {
       _timer = Timer.periodic(const Duration(seconds: 1), (_) {
         if (!mounted) return;
-        if (widget.app.otpResendSecondsLeft <= 0) {
+        if (widget.app.otpResendSecondsLeft <= 0 &&
+            widget.app.otpSendThrottleSecondsLeft <= 0) {
           _timer?.cancel();
           _timer = null;
         }
@@ -646,17 +649,97 @@ class _ResendOtpButtonState extends State<_ResendOtpButton> {
     final lp = widget.lp;
     final cooldown = app.otpResendSecondsLeft;
     final onCooldown = app.otpSent && cooldown > 0;
+    // A Firebase-side throttle always wins over the ordinary cooldown: it
+    // means the last send/resend itself failed, so there is nothing to
+    // count down from except our own conservative local guess.
+    final throttleCooldown = app.otpSendThrottleSecondsLeft;
+    final throttled = throttleCooldown > 0;
     final label = app.otpSending
         ? '…'
-        : onCooldown
-            ? '${t['resendOtp']} (${cooldown}s)'
-            : app.otpSent
-                ? t['resendOtp']
-                : t['sendOtp'];
+        : throttled
+            ? '${t['resendOtp']} (${throttleCooldown}s)'
+            : onCooldown
+                ? '${t['resendOtp']} (${cooldown}s)'
+                : app.otpSent
+                    ? t['resendOtp']
+                    : t['sendOtp'];
     return _SideButton(
       label: label,
-      enabled: lp.mobileNumber.length == 10 && !app.otpSending && !onCooldown,
+      enabled: lp.mobileNumber.length == 10 &&
+          !app.otpSending &&
+          !onCooldown &&
+          !throttled,
       onTap: () => context.app.sendOtp(resend: app.otpSent),
+    );
+  }
+}
+
+/// The "Verify" button. Ticks its own countdown while a Firebase verify
+/// throttle is active, mirroring [_ResendOtpButton] — without a live
+/// countdown here, a throttled Verify would stay showing a stale, already
+/// wrong wait time until some unrelated rebuild happened to refresh it.
+class _VerifyOtpButton extends StatefulWidget {
+  const _VerifyOtpButton({required this.app, required this.t});
+  final AppState app;
+  final Str t;
+
+  @override
+  State<_VerifyOtpButton> createState() => _VerifyOtpButtonState();
+}
+
+class _VerifyOtpButtonState extends State<_VerifyOtpButton> {
+  Timer? _timer;
+
+  @override
+  void didUpdateWidget(covariant _VerifyOtpButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncTimer();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _syncTimer();
+  }
+
+  void _syncTimer() {
+    final active = widget.app.otpVerifyThrottleSecondsLeft > 0;
+    if (active && _timer == null) {
+      _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted) return;
+        if (widget.app.otpVerifyThrottleSecondsLeft <= 0) {
+          _timer?.cancel();
+          _timer = null;
+        }
+        setState(() {});
+      });
+    } else if (!active && _timer != null) {
+      _timer?.cancel();
+      _timer = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = widget.app;
+    final t = widget.t;
+    final throttleCooldown = app.otpVerifyThrottleSecondsLeft;
+    final throttled = throttleCooldown > 0;
+    final label = app.otpSending
+        ? '…'
+        : throttled
+            ? '${t['verify']} (${throttleCooldown}s)'
+            : t['verify'];
+    return _SideButton(
+      label: label,
+      enabled: app.otpCode.length == 6 && !app.otpSending && !throttled,
+      onTap: () => context.app.verifyOtp(),
     );
   }
 }

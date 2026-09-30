@@ -33,26 +33,34 @@ class AuthRepository {
     required void Function(String message) onError,
     bool resend = false,
   }) async {
-    await _auth.verifyPhoneNumber(
-      phoneNumber: '+91$phone',
-      forceResendingToken: resend ? _resendToken : null,
-      timeout: const Duration(seconds: 60),
-      verificationCompleted: (credential) async {
-        try {
-          onVerified(await _auth.signInWithCredential(credential));
-        } catch (e) {
-          onError(_message(e));
-        }
-      },
-      verificationFailed: (e) => onError(_message(e)),
-      codeSent: (verificationId, resendToken) {
-        _verificationId = verificationId;
-        _resendToken = resendToken;
-        onCodeSent();
-      },
-      codeAutoRetrievalTimeout: (verificationId) =>
-          _verificationId = verificationId,
-    );
+    try {
+      await _auth.verifyPhoneNumber(
+        phoneNumber: '+91$phone',
+        forceResendingToken: resend ? _resendToken : null,
+        timeout: const Duration(seconds: 60),
+        verificationCompleted: (credential) async {
+          try {
+            onVerified(await _auth.signInWithCredential(credential));
+          } catch (e) {
+            onError(_message(e));
+          }
+        },
+        verificationFailed: (e) => onError(_message(e)),
+        codeSent: (verificationId, resendToken) {
+          _verificationId = verificationId;
+          _resendToken = resendToken;
+          onCodeSent();
+        },
+        codeAutoRetrievalTimeout: (verificationId) =>
+            _verificationId = verificationId,
+      );
+    } catch (e) {
+      // verifyPhoneNumber's own Future can reject directly (seen on web)
+      // without ever calling verificationFailed — route it through the same
+      // onError channel so callers only ever need to handle one failure path,
+      // including a throttled ("too-many-requests") send/resend.
+      onError(_message(e));
+    }
   }
 
   /// Throws the translation-key string (see [_message]) rather than a raw

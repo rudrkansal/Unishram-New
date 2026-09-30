@@ -511,6 +511,38 @@ class AppState extends ChangeNotifier {
     return left.isNegative ? 0 : left.inSeconds + 1;
   }
 
+  /// Set when Firebase itself throttles a send/resend with
+  /// "too-many-requests". This is a *local* safety cooldown only — Firebase
+  /// never tells us its real unlock time, so [otpThrottleCooldown] is a
+  /// conservative guess, not a guarantee the number is clear afterwards.
+  /// Kept separate from [otpSentAt] because a throttled request never
+  /// succeeds, so it must never look like a fresh send to the resend timer.
+  DateTime? otpSendThrottledUntil;
+
+  /// Same as [otpSendThrottledUntil] but for a throttled *verification*
+  /// attempt (wrong-code guesses that tripped Firebase's abuse protection).
+  /// Tracked separately from the send-side throttle so the two phases never
+  /// show or clear each other's cooldown.
+  DateTime? otpVerifyThrottledUntil;
+
+  static const Duration otpThrottleCooldown = Duration(minutes: 2);
+
+  /// Seconds left on the local send/resend throttle cooldown; 0 once clear.
+  int get otpSendThrottleSecondsLeft {
+    final until = otpSendThrottledUntil;
+    if (until == null) return 0;
+    final left = until.difference(DateTime.now());
+    return left.isNegative ? 0 : left.inSeconds + 1;
+  }
+
+  /// Seconds left on the local verify throttle cooldown; 0 once clear.
+  int get otpVerifyThrottleSecondsLeft {
+    final until = otpVerifyThrottledUntil;
+    if (until == null) return 0;
+    final left = until.difference(DateTime.now());
+    return left.isNegative ? 0 : left.inSeconds + 1;
+  }
+
   // Marketplace
   String jobSkillFilter = '';
   String workerSkillFilter = '';
@@ -719,6 +751,11 @@ class AppState extends ChangeNotifier {
     dobError = '';
     otpSent = false;
     otpCode = '';
+    otpSentAt = null;
+    _otpSentForNumber = null;
+    otpResendCount = 0;
+    otpSendThrottledUntil = null;
+    otpVerifyThrottledUntil = null;
     jobSkillFilter = '';
     workerSkillFilter = '';
     searchMode = 'contractors';
@@ -1115,6 +1152,13 @@ class AppState extends ChangeNotifier {
       update(() => authError = t['authErrorInvalidPhone']);
       return;
     }
+    // Belt-and-braces alongside the UI disabling the button during a local
+    // throttle cooldown — never let a send/resend through early even if
+    // something else triggers this call.
+    if (otpSendThrottleSecondsLeft > 0) {
+      update(() => authError = t['authErrorSendThrottled']);
+      return;
+    }
     // A "resend" only means something for the number the last OTP actually
     // went to. If the number has changed since then (the user spotted a
     // typo and fixed it), this must be a fresh send — reusing the old
@@ -1140,10 +1184,10 @@ class AppState extends ChangeNotifier {
     if (isResend && otpResendSecondsLeft > 0) return;
     final api = backend;
     if (api == null) {
+      // Firebase Phone Auth is NOT available. Production must NEVER silently
+      // accept arbitrary OTP codes. Fail closed: show an error and stop.
       update(() {
-        otpSent = true;
-        otpCode = '';
-        otpSentAt = DateTime.now();
+        authError = t['authErrorNetwork'] ?? 'Phone verification service unavailable. Check your internet connection and try again.';
       });
       return;
     }
@@ -1151,6 +1195,9 @@ class AppState extends ChangeNotifier {
       otpSending = true;
       authError = '';
     });
+    // api.auth.sendOtp never throws — it always resolves and calls exactly
+    // one of the callbacks below, including for a rejected verifyPhoneNumber
+    // Future (see AuthRepository.sendOtp), so no try/catch is needed here.
     await api.auth.sendOtp(
       phone: lp.mobileNumber,
       resend: isResend,
@@ -1172,13 +1219,27 @@ class AppState extends ChangeNotifier {
       },
       onError: (errorKey) => update(() {
         otpSending = false;
-        authError = t[errorKey];
+        if (errorKey == 'authErrorTooManyAttempts') {
+          // Firebase itself throttled this send/resend. It gives no unlock
+          // time, so this is a conservative local guess, not a guarantee.
+          otpSendThrottledUntil = DateTime.now().add(otpThrottleCooldown);
+          authError = t['authErrorSendThrottled'];
+        } else {
+          authError = t[errorKey];
+        }
       }),
     );
   }
 
   Future<void> verifyOtp() async {
     if (otpCode.length < 6) return;
+    // Belt-and-braces alongside the UI disabling Verify during a local
+    // throttle cooldown — never let a verify attempt through early even if
+    // something else triggers this call.
+    if (otpVerifyThrottleSecondsLeft > 0) {
+      update(() => authError = t['authErrorVerifyThrottled']);
+      return;
+    }
     // Check if OTP has expired (Firebase timeout is 60 seconds)
     final sentAt = otpSentAt;
     if (sentAt != null && DateTime.now().difference(sentAt).inSeconds > 60) {
@@ -1190,7 +1251,11 @@ class AppState extends ChangeNotifier {
     }
     final api = backend;
     if (api == null) {
-      update(() => lp.phoneVerified = true);
+      // Firebase Phone Auth is NOT available. Production must NEVER silently
+      // accept arbitrary OTP codes. Fail closed: show an error and stop.
+      update(() {
+        authError = t['authErrorNetwork'] ?? 'Phone verification service unavailable. Check your internet connection and try again.';
+      });
       return;
     }
     update(() {
@@ -1206,12 +1271,24 @@ class AppState extends ChangeNotifier {
       });
       await _afterSignIn();
     } catch (e) {
+      final key = e is String ? e : 'authErrorGeneric';
+      final throttled = key == 'authErrorTooManyAttempts';
       update(() {
         otpSending = false;
         // Do NOT mark as verified if authentication failed
         lp.phoneVerified = false;
-        authError = t[e is String ? e : 'authErrorGeneric'];
-        otpCode = '';
+        if (throttled) {
+          // Firebase itself throttled this verify attempt. It gives no
+          // unlock time, so this is a conservative local guess, not a
+          // guarantee. The code the user already typed may still be valid
+          // once the restriction lifts, so it's deliberately kept (not
+          // cleared like every other failure below).
+          otpVerifyThrottledUntil = DateTime.now().add(otpThrottleCooldown);
+          authError = t['authErrorVerifyThrottled'];
+        } else {
+          authError = t[key];
+          otpCode = '';
+        }
       });
     }
   }
