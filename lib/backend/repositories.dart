@@ -3,7 +3,9 @@ import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/foundation.dart';
 import 'package:geoflutterfire_plus/geoflutterfire_plus.dart';
 
 import 'models.dart';
@@ -32,6 +34,29 @@ class AuthRepository {
     required void Function(UserCredential credential) onVerified,
     required void Function(String message) onError,
     bool resend = false,
+  }) async {
+    try {
+      await _verifyPhoneNumber(
+        phone: phone,
+        onCodeSent: onCodeSent,
+        onVerified: onVerified,
+        onError: onError,
+        resend: resend,
+      );
+    } catch (e) {
+      // verifyPhoneNumber can throw instead of calling verificationFailed
+      // (e.g. a malformed number or a platform-channel error); without this
+      // the Send OTP spinner never stops.
+      onError(_message(e));
+    }
+  }
+
+  Future<void> _verifyPhoneNumber({
+    required String phone,
+    required void Function() onCodeSent,
+    required void Function(UserCredential credential) onVerified,
+    required void Function(String message) onError,
+    required bool resend,
   }) async {
     await _auth.verifyPhoneNumber(
       phoneNumber: '+91$phone',
@@ -88,6 +113,7 @@ class AuthRepository {
   /// code with no specific copy of its own (rare, but the raw
   /// [FirebaseAuthException.message] is always English and never shown).
   static String _message(Object error) {
+    _logAuthError(error);
     if (error is FirebaseAuthException) {
       return switch (error.code) {
         'invalid-phone-number' => 'authErrorInvalidPhone',
@@ -101,6 +127,20 @@ class AuthRepository {
       };
     }
     return 'authErrorGeneric';
+  }
+
+  /// The user only ever sees the translated copy, which hides what actually
+  /// went wrong (a missing SHA fingerprint, Play Integrity, billing...). Log
+  /// the real code to the console and to Crashlytics so Play builds can be
+  /// diagnosed without a cable.
+  static void _logAuthError(Object error) {
+    final detail = error is FirebaseAuthException
+        ? 'FirebaseAuthException(${error.code}): ${error.message}'
+        : '$error';
+    debugPrint('Phone auth failed: $detail');
+    unawaited(FirebaseCrashlytics.instance
+        .recordError(error, StackTrace.current, reason: 'phone auth: $detail')
+        .catchError((_) {}));
   }
 }
 
