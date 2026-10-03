@@ -47,6 +47,25 @@ class AccountActions extends StatelessWidget {
         const Divider(color: C.border),
         const SizedBox(height: 8),
         TextButton(
+          onPressed: () => context.app.openLegalDocument(terms: true),
+          child: Text(t['termsTitle'],
+              style: const TextStyle(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w700,
+                  color: C.textMid)),
+        ),
+        TextButton(
+          onPressed: () => context.app.openLegalDocument(terms: false),
+          child: Text(t['privacyTitle'],
+              style: const TextStyle(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w700,
+                  color: C.textMid)),
+        ),
+        const SizedBox(height: 8),
+        const Divider(color: C.border),
+        const SizedBox(height: 8),
+        TextButton(
           onPressed: () => context.app.signOut(),
           child: Text(t['signOut'],
               style: const TextStyle(
@@ -67,15 +86,8 @@ class AccountActions extends StatelessWidget {
   }
 
   void _editProfile(BuildContext context, AppState app) {
-    final role = app.role;
-    if (role == null) return;
-    final targetScreen = switch (role) {
-      Role.labourer => Screen.profilePersonal,
-      Role.contractor => Screen.profilePersonal,
-      Role.client => Screen.profilePersonal,
-      Role.vendor => Screen.profilePersonal,
-    };
-    context.app.update(() => app.screen = targetScreen);
+    if (app.role == null) return;
+    context.app.beginEditProfile();
   }
 
   Future<void> _confirmDelete(BuildContext context) async {

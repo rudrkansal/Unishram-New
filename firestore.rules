@@ -121,6 +121,17 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      // Terms acceptance (owner-only, readable via the /private rule above): the version accepted and
+      // WHEN — the timestamp must be the server's request time, so a client can never forge or backdate it.
+      match /private/terms {
+        allow create, update: if isSelf(uid)
+          && request.resource.data.keys().hasOnly(['termsVersion', 'termsAcceptedAt'])
+          && request.resource.data.keys().hasAll(['termsVersion', 'termsAcceptedAt'])
+          && request.resource.data.termsVersion is string
+          && request.resource.data.termsVersion.matches('^[0-9]{1,3}(\\.[0-9]{1,3}){0,2}$')
+          && request.resource.data.termsAcceptedAt == request.time;
+      }
+
       match /tokens/{token} {
         allow read, write: if isSelf(uid);
       }
@@ -157,6 +168,13 @@ service cloud.firestore {
         && resource.data.postedBy == request.auth.uid
         && fieldKept('postedBy')
         && fieldKept('applicantCount')
+        // The wage and the minimum-wage record are fixed at posting (set by postJob / onJobPosted); a poster
+        // cannot lower the wage afterwards or rewrite the minimum it was checked against.
+        && fieldKept('wage')
+        && fieldKept('minWageAtPost')
+        && fieldKept('belowMinimumWage')
+        && fieldKept('skill')
+        && fieldKept('state')
         // No new/changed phone on the public job (a legacy value may stay until
         // it is migrated, or be removed, but not be set or edited).
         && (request.resource.data.get('contractorPhone', '') == ''

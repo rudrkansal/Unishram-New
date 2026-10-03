@@ -69,6 +69,11 @@ android {
     }
 }
 
+dependencies {
+    // Firebase App Check with Play Integrity for Android
+    implementation 'com.google.firebase:firebase-appcheck-playintegrity'
+}
+
 flutter {
     source = "../.."
 }

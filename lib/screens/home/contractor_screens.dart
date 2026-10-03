@@ -106,170 +106,204 @@ class ContractorApplicants extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.appWatch;
     final t = app.t;
-    final job = app.jobById(app.selectedJobId);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (job != null)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 14, 20, 4),
-            child: Text(job.title,
-                style: const TextStyle(
-                    fontSize: 15, fontWeight: FontWeight.w700, color: C.text)),
-          ),
-        Expanded(
-          child: FeedBuilder<ApplicationDoc>(
-            stream: app.applicationsForJob(app.selectedJobId ?? ''),
-            emptyText: t['noApplicantsYet'],
-            builder: (context, applicants) => ListView.separated(
-              padding: const EdgeInsets.fromLTRB(18, 12, 18, 20),
-              itemCount: applicants.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 10),
-              itemBuilder: (context, i) {
-                final w = applicants[i];
-                final status = w.status;
-                final (bg, fg, label) = switch (status) {
-                  'hired' => (C.accentTint, C.accent, t['employed']),
-                  'shortlisted' => (C.okBg, C.ok, t['shortlisted']),
-                  'rejected' => (C.dangerBg, C.danger, t['rejected']),
-                  _ => (C.surfaceMuted, C.textSecondary, t['pending']),
-                };
-                return GestureDetector(
-                  onTap: () => context.app.viewWorker(w.workerId, Screen.contractorApplicants),
-                  child: SurfaceCard(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(
-                      children: [
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Avatar(initialsOf(w.workerName)),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
+    return FeedBuilder<Job>(
+      stream: app.myPostedJobsFeed(),
+      emptyText: t['noJobsYet'],
+      builder: (context, jobs) => ListView.separated(
+        padding: const EdgeInsets.fromLTRB(18, 12, 18, 20),
+        itemCount: jobs.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 20),
+        itemBuilder: (context, jobIndex) {
+          final job = jobs[jobIndex];
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(job.title,
+                        style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: C.text)),
+                  ),
+                  _ActionButton(
+                    label: t['markFilled'] ?? 'Mark Filled',
+                    background: job.status == 'filled' ? C.dangerBg : C.accentTint,
+                    color: job.status == 'filled' ? C.danger : C.accent,
+                    onTap: job.status == 'filled' ? null : () => context.app.markJobFilled(job.id),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              StreamBuilder<List<ApplicationDoc>>(
+                stream: app.applicationsForJob(job.id),
+                builder: (context, snapshot) {
+                  final applicants = snapshot.data ?? [];
+                  if (applicants.isEmpty) {
+                    return Text(t['noApplicantsYet'],
+                        style: const TextStyle(
+                            fontSize: 13, color: C.mutedSoft));
+                  }
+                  return ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: applicants.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (context, appIndex) {
+                      final w = applicants[appIndex];
+                      final status = w.status;
+                      final (bg, fg, label) = switch (status) {
+                        'hired' => (C.accentTint, C.accent, t['employed']),
+                        'shortlisted' => (C.okBg, C.ok, t['shortlisted']),
+                        'rejected' => (C.dangerBg, C.danger, t['rejected']),
+                        _ => (C.surfaceMuted, C.textSecondary, t['pending']),
+                      };
+                      return GestureDetector(
+                        onTap: () => context.app.viewWorker(
+                            w.workerId, Screen.contractorApplicants),
+                        child: SurfaceCard(
+                          padding: const EdgeInsets.all(14),
+                          child: Column(
+                            children: [
+                              Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: Text(w.workerName,
+                                  Avatar(initialsOf(w.workerName)),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(w.workerName,
+                                                  style: const TextStyle(
+                                                      fontSize: 14,
+                                                      fontWeight:
+                                                          FontWeight.w700,
+                                                      color: C.text)),
+                                            ),
+                                            BadgePill(label,
+                                                background: bg, color: fg),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(w.workerSkill,
                                             style: const TextStyle(
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.w700,
-                                                color: C.text)),
-                                      ),
-                                      BadgePill(label, background: bg, color: fg),
-                                    ],
+                                                fontSize: 12,
+                                                color: C.textSecondary)),
+                                        const SizedBox(height: 6),
+                                        Row(
+                                          children: [
+                                            Text(t['wageExpectation'],
+                                                style: const TextStyle(
+                                                    fontSize: 11.5,
+                                                    color: C.mutedSoft)),
+                                            const Spacer(),
+                                            Text('₹${inr(w.expectedWage)}/day',
+                                                style: const TextStyle(
+                                                    fontSize: 12.5,
+                                                    fontWeight:
+                                                        FontWeight.w700,
+                                                    color: C.text)),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                  const SizedBox(height: 2),
-                                  Text(w.workerSkill,
-                                      style: const TextStyle(
-                                          fontSize: 12, color: C.textSecondary)),
-                                  const SizedBox(height: 6),
-                                  Row(
-                                    children: [
-                                      // What the worker asked for, which is
-                                      // the number the contractor decides on.
-                                      Text(t['wageExpectation'],
-                                          style: const TextStyle(
-                                              fontSize: 11.5,
-                                              color: C.mutedSoft)),
-                                      const Spacer(),
-                                      Text('₹${inr(w.expectedWage)}/day',
-                                          style: const TextStyle(
-                                              fontSize: 12.5,
-                                              fontWeight: FontWeight.w700,
-                                              color: C.text)),
-                                    ],
+                                  InkWell(
+                                    onTap: () => showReportBlockSheet(context,
+                                        userId: w.workerId,
+                                        userName: w.workerName),
+                                    borderRadius: BorderRadius.circular(20),
+                                    child: const Padding(
+                                      padding: EdgeInsets.all(4),
+                                      child: Icon(Icons.more_vert,
+                                          size: 20, color: C.mutedSoft),
+                                    ),
                                   ),
                                 ],
                               ),
-                            ),
-                            InkWell(
-                              onTap: () => showReportBlockSheet(context,
-                                  userId: w.workerId, userName: w.workerName),
-                              borderRadius: BorderRadius.circular(20),
-                              child: const Padding(
-                                padding: EdgeInsets.all(4),
-                                child: Icon(Icons.more_vert,
-                                    size: 20, color: C.mutedSoft),
-                              ),
-                            ),
-                          ],
-                        ),
-                      const SizedBox(height: 12),
-                      _CallMessageRow(app: app, t: t, w: w),
-                      const SizedBox(height: 8),
-                      if (status == 'shortlisted')
-                        Row(
-                          children: [
-                            Expanded(
-                              flex: 3,
-                              child: _ActionButton(
-                                label: t['markEmployed'],
-                                background: C.accentTint,
-                                color: C.accent,
-                                onTap: () => context.app.setApplicationStatus(
-                                    w.jobId, w.workerId, 'hired'),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              flex: 2,
-                              child: _ActionButton(
-                                label: t['reject'],
-                                background: C.dangerBg,
-                                color: C.danger,
-                                onTap: () => context.app.setApplicationStatus(
-                                    w.jobId, w.workerId, 'rejected'),
-                              ),
-                            ),
-                          ],
-                        )
-                      else
-                        if (status == 'hired')
-                          _ActionButton(
-                            label: t['employed'],
-                            background: C.accentTint,
-                            color: C.accent,
-                            onTap: null,
-                          )
-                        else
-                          Row(
-                            children: [
-                              Expanded(
-                                child: _ActionButton(
-                                  label: t['shortlist'],
+                              const SizedBox(height: 12),
+                              _CallMessageRow(app: app, t: t, w: w),
+                              const SizedBox(height: 8),
+                              if (status == 'shortlisted')
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      flex: 3,
+                                      child: _ActionButton(
+                                        label: t['markEmployed'],
+                                        background: C.accentTint,
+                                        color: C.accent,
+                                        onTap: () => context.app
+                                            .setApplicationStatus(w.jobId,
+                                                w.workerId, 'hired'),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      flex: 2,
+                                      child: _ActionButton(
+                                        label: t['reject'],
+                                        background: C.dangerBg,
+                                        color: C.danger,
+                                        onTap: () => context.app
+                                            .setApplicationStatus(w.jobId,
+                                                w.workerId, 'rejected'),
+                                      ),
+                                    ),
+                                  ],
+                                )
+                              else if (status == 'hired')
+                                _ActionButton(
+                                  label: t['employed'],
                                   background: C.accentTint,
                                   color: C.accent,
-                                  onTap: () =>
-                                      context.app.setApplicationStatus(
-                                          w.jobId, w.workerId, 'shortlisted'),
+                                  onTap: null,
+                                )
+                              else
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: _ActionButton(
+                                        label: t['shortlist'],
+                                        background: C.accentTint,
+                                        color: C.accent,
+                                        onTap: () => context.app
+                                            .setApplicationStatus(w.jobId,
+                                                w.workerId, 'shortlisted'),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: _ActionButton(
+                                        label: t['reject'],
+                                        background: C.dangerBg,
+                                        color: C.danger,
+                                        onTap: () => context.app
+                                            .setApplicationStatus(w.jobId,
+                                                w.workerId, 'rejected'),
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: _ActionButton(
-                                  label: t['reject'],
-                                  background: C.dangerBg,
-                                  color: C.danger,
-                                  onTap: () =>
-                                      context.app.setApplicationStatus(
-                                          w.jobId, w.workerId, 'rejected'),
-                                ),
-                              ),
                             ],
                           ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
-      ],
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 }
@@ -653,105 +687,108 @@ class ContractorFind extends StatelessWidget {
         ),
         Expanded(
           child: ListView(
-      padding: const EdgeInsets.only(bottom: 20),
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(18, 14, 18, 4),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            padding: const EdgeInsets.only(bottom: 20),
             children: [
-              Text(t['workerFilterLabel'], style: T.label),
-              const SizedBox(height: 6),
-              _Dropdown(
-                value: app.workerSkillFilter.isEmpty
-                    ? '__all'
-                    : app.workerSkillFilter,
-                items: [
-                  ('__all', t['allWord']),
-                  for (final s in kSkills) (s.jobLabel, s.name(app.copyLang)),
-                ],
-                onChanged: (v) => context.app.update(
-                    () => app.workerSkillFilter = v == '__all' ? '' : v),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 14, 18, 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(t['workerFilterLabel'], style: T.label),
+                    const SizedBox(height: 6),
+                    _Dropdown(
+                      value: app.workerSkillFilter.isEmpty
+                          ? '__all'
+                          : app.workerSkillFilter,
+                      items: [
+                        ('__all', t['allWord']),
+                        for (final s in kSkills)
+                          (s.jobLabel, s.name(app.copyLang)),
+                      ],
+                      onChanged: (v) => context.app.update(
+                          () => app.workerSkillFilter = v == '__all' ? '' : v),
+                    ),
+                  ],
+                ),
               ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(18, 8, 18, 0),
-          child: FeedBuilder<Worker>(
-            stream: app.workerFeed(),
-            emptyText: t['noWorkersYet'],
-            builder: (context, workers) => Column(
-              children: [
-                for (final w in workers)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: SurfaceCard(
-                      padding: const EdgeInsets.all(14),
-                      onTap: () => context.app.viewWorker(
-                          w.id,
-                          forClient
-                              ? Screen.clientSearch
-                              : Screen.contractorFind,
-                          worker: w),
-                      child: Row(
-                        children: [
-                          Avatar(initialsOf(w.name)),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 8, 18, 0),
+                child: FeedBuilder<Worker>(
+                  stream: app.workerFeed(),
+                  emptyText: t['noWorkersYet'],
+                  builder: (context, workers) => Column(
+                    children: [
+                      for (final w in workers)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: SurfaceCard(
+                            padding: const EdgeInsets.all(14),
+                            onTap: () => context.app.viewWorker(
+                                w.id,
+                                forClient
+                                    ? Screen.clientSearch
+                                    : Screen.contractorFind,
+                                worker: w),
+                            child: Row(
                               children: [
-                                Text(w.name,
-                                    style: const TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w700,
-                                        color: C.text)),
-                                const SizedBox(height: 2),
-                                Text(
-                                    '${w.skill} · ${w.experience} · ${w.location}',
-                                    style: const TextStyle(
-                                        fontSize: 12, color: C.textSecondary)),
-                                const SizedBox(height: 6),
-                                Row(
-                                  children: [
-                                    Text('★ ${w.rating}',
-                                        style: const TextStyle(
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w700,
-                                            color: C.accent)),
-                                    const SizedBox(width: 8),
-                                    BadgePill(
-                                        w.available
-                                            ? t['availableNow']
-                                            : t['onProject'],
-                                        background: w.available
-                                            ? C.okBg
-                                            : C.surfaceMuted,
-                                        color: w.available
-                                            ? C.ok
-                                            : C.textSecondary),
-                                    const Spacer(),
-                                    if (!forClient)
-                                      Text('₹${inr(w.wage)}/day',
+                                Avatar(initialsOf(w.name)),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(w.name,
                                           style: const TextStyle(
-                                              fontSize: 12.5,
+                                              fontSize: 14,
                                               fontWeight: FontWeight.w700,
                                               color: C.text)),
-                                  ],
+                                      const SizedBox(height: 2),
+                                      Text(
+                                          '${w.skill} · ${w.experience} · ${w.location}',
+                                          style: const TextStyle(
+                                              fontSize: 12,
+                                              color: C.textSecondary)),
+                                      const SizedBox(height: 6),
+                                      Row(
+                                        children: [
+                                          Text('★ ${w.rating}',
+                                              style: const TextStyle(
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: C.accent)),
+                                          const SizedBox(width: 8),
+                                          BadgePill(
+                                              w.available
+                                                  ? t['availableNow']
+                                                  : t['onProject'],
+                                              background: w.available
+                                                  ? C.okBg
+                                                  : C.surfaceMuted,
+                                              color: w.available
+                                                  ? C.ok
+                                                  : C.textSecondary),
+                                          const Spacer(),
+                                          if (!forClient)
+                                            Text('₹${inr(w.wage)}/day',
+                                                style: const TextStyle(
+                                                    fontSize: 12.5,
+                                                    fontWeight: FontWeight.w700,
+                                                    color: C.text)),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ],
                             ),
                           ),
-                        ],
-                      ),
-                    ),
+                        ),
+                    ],
                   ),
-              ],
-            ),
-          ),
-        ),
-      ],
+                ),
+              ),
+            ],
           ),
         ),
       ],
@@ -822,19 +859,21 @@ class WorkerDetail extends StatelessWidget {
                     subtitle: '${w.skill} · ${w.location}',
                     phone: w.phone,
                   ))),
-        const SizedBox(height: 12),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            RateButton(
-              app: app,
-              t: t,
-              aboutUserId: w.id,
-              jobId: app.selectedJobId ?? '',
-              aboutName: w.name,
-            ),
-          ],
-        ),
+        if (w.id != app.uid) ...[
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              RateButton(
+                app: app,
+                t: t,
+                aboutUserId: w.id,
+                jobId: app.selectedJobId ?? '',
+                aboutName: w.name,
+              ),
+            ],
+          ),
+        ],
       ],
     );
   }
@@ -1229,7 +1268,7 @@ class ContractorProfile extends StatelessWidget {
         const SizedBox(height: 8),
         TextButton(
           onPressed: () => context.app.go(Screen.langSelect),
-          child: Text(app.t['changeLanguage'] ?? 'Change Language',
+          child: Text(app.t['changeLanguage'],
               style: const TextStyle(
                   fontSize: 14.5,
                   fontWeight: FontWeight.w700,

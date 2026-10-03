@@ -5,6 +5,7 @@ import '../../data/catalog.dart';
 import '../../data/strings.dart';
 import '../../state/app_state.dart';
 import '../../theme.dart';
+import '../../backend/experience.dart';
 import '../../backend/models.dart';
 import '../../widgets/common.dart';
 import '../../widgets/account_actions.dart';
@@ -808,7 +809,7 @@ class LabourerProfile extends StatelessWidget {
               const SizedBox(height: 8),
               TextButton(
                 onPressed: () => context.app.go(Screen.langSelect),
-                child: Text(t['changeLanguage'] ?? 'Change Language',
+                child: Text(t['changeLanguage'],
                     style: const TextStyle(
                         fontSize: 14.5,
                         fontWeight: FontWeight.w700,
@@ -828,11 +829,16 @@ class LabourerProfile extends StatelessWidget {
   static String _experienceLabel(AppState app) {
     final lp = app.lp;
     final t = app.t;
-    if (lp.experienceYears == null) return '—';
-    if (lp.experienceYears == 0 && lp.experienceMonths != null) {
-      return '${lp.experienceMonths} ${t['monthsShort']}';
-    }
-    return '${lp.experienceIs10Plus ? t['tenPlus'] : lp.experienceYears} ${t['yearsShort']}';
+    final total = effectiveExperienceMonths(
+        years: lp.experienceYears,
+        months: lp.experienceMonths,
+        asOf: lp.experienceAsOf);
+    if (total == null) return '—';
+    return experienceLabel(total,
+        tenPlus: lp.experienceIs10Plus,
+        monthsWord: t['monthsShort'],
+        yearsWord: t['yearsShort'],
+        tenPlusWord: t['tenPlus']);
   }
 }
 

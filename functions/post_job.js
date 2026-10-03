@@ -15,6 +15,8 @@ const {onCall, HttpsError} = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const {FieldValue, Timestamp, GeoPoint} = require("firebase-admin/firestore");
 
+const {minimumWageFor} = require("./min_wage");
+
 const COOLDOWN_MS = 15 * 1000;
 const BASE32 = "0123456789bcdefghjkmnpqrstuvwxyz";
 
@@ -117,6 +119,14 @@ exports.postJob = onCall(async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "Sign in first.");
   const uid = request.auth.uid;
   const input = parseJobInput(request.data);
+
+  // Legal minimum wage, enforced here so a modified client cannot skip the app's own check. `state` is the state
+  // the job is IN (the app sends the pincode-derived one); an unknown/empty state uses the national floor.
+  const minimum = minimumWageFor(input.state, input.skill);
+  if (input.wage < minimum) {
+    throw new HttpsError("invalid-argument",
+        `The wage is below the legal minimum of ₹${minimum} per day for this job.`, {minimumWage: minimum});
+  }
 
   const db = admin.firestore();
   const userRef = db.collection("users").doc(uid);

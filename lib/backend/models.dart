@@ -40,6 +40,9 @@ class UserDoc {
   final List<String> additionalSkillIds;
   final int? experienceYears;
   final int? experienceMonths;
+
+  /// When [experienceYears]/[experienceMonths] were entered; experience keeps growing from this date.
+  final DateTime? experienceAsOf;
   final String preferredWorkArea;
   final int expectedWage;
   final String availability;
@@ -79,6 +82,7 @@ class UserDoc {
     this.additionalSkillIds = const [],
     this.experienceYears,
     this.experienceMonths,
+    this.experienceAsOf,
     this.preferredWorkArea = '',
     this.expectedWage = 0,
     this.availability = 'available',
@@ -128,6 +132,8 @@ class UserDoc {
         'skillIds': skillIds,
         'experienceYears': experienceYears,
         'experienceMonths': experienceMonths,
+        'experienceAsOf':
+            experienceAsOf == null ? null : Timestamp.fromDate(experienceAsOf!),
         'preferredWorkArea': preferredWorkArea,
         'expectedWage': expectedWage,
         'availability': availability,
@@ -175,6 +181,7 @@ class UserDoc {
       experienceMonths: d['experienceMonths'] is num
           ? (d['experienceMonths'] as num).toInt()
           : null,
+      experienceAsOf: _t(d['experienceAsOf']),
       preferredWorkArea: d['preferredWorkArea'] ?? '',
       expectedWage: _i(d['expectedWage']),
       availability: d['availability'] ?? 'available',

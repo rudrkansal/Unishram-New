@@ -200,7 +200,7 @@ class ClientProfile extends StatelessWidget {
         const SizedBox(height: 8),
         TextButton(
           onPressed: () => context.app.go(Screen.langSelect),
-          child: Text(app.t['changeLanguage'] ?? 'Change Language',
+          child: Text(app.t['changeLanguage'],
               style: const TextStyle(
                   fontSize: 14.5,
                   fontWeight: FontWeight.w700,
@@ -383,7 +383,7 @@ class VendorProfile extends StatelessWidget {
         const SizedBox(height: 8),
         TextButton(
           onPressed: () => context.app.go(Screen.langSelect),
-          child: Text(app.t['changeLanguage'] ?? 'Change Language',
+          child: Text(app.t['changeLanguage'],
               style: const TextStyle(
                   fontSize: 14.5,
                   fontWeight: FontWeight.w700,

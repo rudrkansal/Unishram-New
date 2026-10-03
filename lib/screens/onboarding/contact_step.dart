@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../../app_scope.dart';
+import '../../state/app_state.dart';
 import '../../theme.dart';
 import '../../widgets/common.dart';
+import '../terms_screens.dart';
 import 'step_scaffold.dart';
 import 'work_step.dart';
 
@@ -22,8 +24,11 @@ class ContactStep extends StatelessWidget {
       stepCount: 3,
       speakText: '${t['lpTitle3']}. ${t['phoneNumber']}. ${t['profilePhoto']}',
       footer: PrimaryButton(
-        t['completeProfile'],
-        enabled: app.contactValid,
+        t[app.editingProfile ? 'updateProfile' : 'completeProfile'],
+        enabled: AppState.canCompleteProfile(
+            stepValid: app.contactValid,
+            termsChecked: app.termsChecked,
+            termsCurrent: app.termsCurrent),
         onTap: () => context.app.completeProfile(),
       ),
       children: [
@@ -160,6 +165,8 @@ class ContactStep extends StatelessWidget {
             ),
           ],
         ),
+        // The very last thing before "Complete profile": accepting the Terms.
+        const TermsConsentCheck(),
       ],
     );
   }

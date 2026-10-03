@@ -12,6 +12,7 @@ import 'screens/onboarding/personal_step.dart';
 import 'screens/onboarding/work_step.dart';
 import 'screens/role_screen.dart';
 import 'screens/splash_screen.dart';
+import 'screens/terms_screens.dart';
 import 'state/app_state.dart';
 import 'theme.dart';
 import 'widgets/app_shell.dart';
@@ -93,5 +94,8 @@ class AppRoot extends StatelessWidget {
         Screen.vendorProfile => const VendorProfile(),
         Screen.chatThread => const ChatThread(),
         Screen.blockedUsers => const BlockedUsersScreen(),
+        Screen.terms => const TermsGateScreen(),
+        Screen.termsDocument => const LegalDocumentScreen(terms: true),
+        Screen.privacyDocument => const LegalDocumentScreen(terms: false),
       };
 }
