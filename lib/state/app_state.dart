@@ -1455,6 +1455,9 @@ class AppState extends ChangeNotifier {
       }),
       // Android can read the SMS itself, which signs the user in with no typing.
       onVerified: (_) async {
+        // The typed code may already have signed the user in — don't run
+        // the post-sign-in work a second time.
+        if (lp.phoneVerified) return;
         update(() {
           otpSending = false;
           lp.phoneVerified = true;
@@ -1464,6 +1467,11 @@ class AppState extends ChangeNotifier {
       },
       onError: (errorKey) => update(() {
         otpSending = false;
+        // Android's SMS auto-read can finish *after* the user already
+        // verified by typing the code. Its sign-in then fails with
+        // "session-expired" because that code was just used — the phone is
+        // verified, so that late error must not be shown.
+        if (lp.phoneVerified) return;
         if (errorKey == 'authErrorTooManyAttempts') {
           // Firebase itself throttled this send/resend. It gives no unlock
           // time, so this is a conservative local guess, not a guarantee.
@@ -1478,7 +1486,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> verifyOtp() async {
-    if (otpCode.length < 6) return;
+    if (otpCode.length < 6 || lp.phoneVerified) return;
     // Belt-and-braces alongside the UI disabling Verify during a local
     // throttle cooldown — never let a verify attempt through early even if
     // something else triggers this call.
@@ -1520,6 +1528,16 @@ class AppState extends ChangeNotifier {
       });
       await _afterSignIn();
     } catch (e) {
+      // SMS auto-read signed the user in while this typed code was in
+      // flight, so the code was already used. The phone *is* verified —
+      // don't undo that or show the stale "code expired" error.
+      if (lp.phoneVerified) {
+        update(() {
+          otpSending = false;
+          authError = '';
+        });
+        return;
+      }
       final key = e is String ? e : 'authErrorGeneric';
       final throttled = key == 'authErrorTooManyAttempts';
       update(() {

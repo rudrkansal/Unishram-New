@@ -57,7 +57,8 @@ android {
             // its SHA-1/SHA-256 must be registered in Firebase Console under
             // this Android app or phone auth will reject every request with
             // "not authorized to use Firebase Authentication".
-            if (!keystorePropertiesFile.exists()) {
+            def isReleaseTask = gradle.startParameter.taskNames.any { it.toLowerCase().contains("release") }
+            if (isReleaseTask && !keystorePropertiesFile.exists()) {
                 throw new GradleException(
                     "Release build requires android/key.properties (gitignored). " +
                     "Signing credentials are missing. Do not proceed. " +
