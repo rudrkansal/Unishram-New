@@ -136,13 +136,16 @@ class ClientContractorDetail extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 24),
-        PrimaryButton(t['contact'],
-            onTap: () => context.app.openContact(ContactTarget(
-                  name: c.name,
-                  subtitle: '${c.location} · ${c.projects}',
-                  phone: c.phone,
-                  chatPeerId: c.id,
-                ))),
+        // No direct chat from the Find screens (chat is job-scoped), and other
+        // users' phones are not on public profiles — Contact only appears where
+        // a phone is actually available (offline sample data).
+        if (c.phone.isNotEmpty)
+          PrimaryButton(t['contact'],
+              onTap: () => context.app.openContact(ContactTarget(
+                    name: c.name,
+                    subtitle: '${c.location} · ${c.projects}',
+                    phone: c.phone,
+                  ))),
       ],
     );
   }
@@ -197,7 +200,7 @@ class ClientProfile extends StatelessWidget {
         const SizedBox(height: 8),
         TextButton(
           onPressed: () => context.app.go(Screen.langSelect),
-          child: Text(app.t['changeLanguage'] ?? 'Change Language',
+          child: Text(app.t['changeLanguage'],
               style: const TextStyle(
                   fontSize: 14.5,
                   fontWeight: FontWeight.w700,
@@ -380,7 +383,7 @@ class VendorProfile extends StatelessWidget {
         const SizedBox(height: 8),
         TextButton(
           onPressed: () => context.app.go(Screen.langSelect),
-          child: Text(app.t['changeLanguage'] ?? 'Change Language',
+          child: Text(app.t['changeLanguage'],
               style: const TextStyle(
                   fontSize: 14.5,
                   fontWeight: FontWeight.w700,
@@ -499,7 +502,13 @@ class _ChatThreadState extends State<ChatThread> {
               child: StreamBuilder<List<ChatMessage>>(
               stream: _stream,
               builder: (context, snapshot) {
-                final messages = snapshot.data ?? const <ChatMessage>[];
+                final app = context.appWatch;
+                var messages = snapshot.data ?? const <ChatMessage>[];
+                // Filter out messages from blocked users
+                messages = messages.where((m) {
+                  final senderId = m.senderId;
+                  return senderId == null || !app.blockedUserIds.contains(senderId);
+                }).toList();
                 return ListView.builder(
                   padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
                   itemCount: messages.length,

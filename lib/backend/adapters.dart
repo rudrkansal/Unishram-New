@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../data/catalog.dart';
+import 'experience.dart';
 import 'models.dart';
 import 'repositories.dart';
 
@@ -53,6 +54,7 @@ extension JobDocView on JobDoc {
             _iso(startDate), _iso(endDate), hoursPerDay == 0 ? '' : '$hoursPerDay'),
         endDate: endDate,
         minWageAtPost: minWageAtPost,
+        status: status,
       );
 }
 
@@ -66,7 +68,7 @@ extension UserDocView on UserDoc {
         [city, state].where((e) => e.isNotEmpty).join(', '),
         ratingAverage,
         expectedWage,
-        phone,
+        '', // other users' phones are private — never shown from a public profile
         available: availability == 'available',
       );
 
@@ -78,15 +80,14 @@ extension UserDocView on UserDoc {
         ratingCount == 0
             ? 'New'
             : '$ratingCount ${ratingCount == 1 ? 'review' : 'reviews'}',
-        phone,
+        '', // other users' phones are private — never shown from a public profile
       );
 
   String _experience() {
-    if (experienceYears == null) return '—';
-    if (experienceYears == 0 && (experienceMonths ?? 0) > 0) {
-      return '$experienceMonths mo';
-    }
-    return '$experienceYears yrs';
+    final total = effectiveExperienceMonths(
+        years: experienceYears, months: experienceMonths, asOf: experienceAsOf);
+    if (total == null) return '—';
+    return experienceLabel(total, monthsWord: 'mo', yearsWord: 'yrs');
   }
 }
 

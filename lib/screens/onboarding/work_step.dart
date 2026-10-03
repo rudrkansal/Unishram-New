@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../app_scope.dart';
+import '../../backend/experience.dart';
 import '../../data/catalog.dart';
 import '../../data/strings.dart';
 import '../../services/places_service.dart';
@@ -10,6 +11,7 @@ import '../../state/app_state.dart';
 import '../../theme.dart';
 import '../../widgets/common.dart';
 import '../picker_sheet.dart';
+import '../terms_screens.dart';
 import 'step_scaffold.dart';
 
 /// Step 2 — what the person does. Labourers answer skills, experience, wage and
@@ -28,8 +30,15 @@ class WorkStep extends StatelessWidget {
       stepCount: 3,
       speakText: '${t['lpTitle2']}. ${t['primarySkillQ']}',
       footer: PrimaryButton(
-        t['continueBtn'],
-        enabled: app.workValid,
+        // Clients finish on this step, so when they edit their profile it says "Update your profile".
+        app.editingProfile && app.role == Role.client
+            ? t['updateProfile']
+            : t['continueBtn'],
+        // Clients finish here, so for them the Terms box (last item above) gates this button.
+        enabled: AppState.canCompleteProfile(
+            stepValid: app.workValid,
+            termsChecked: app.termsChecked || app.role != Role.client,
+            termsCurrent: app.termsCurrent),
         onTap: () => context.app.continueFromWork(),
       ),
       children: switch (app.role) {
@@ -47,6 +56,11 @@ class WorkStep extends StatelessWidget {
     final t = app.t;
     final lp = app.lp;
     final primary = skillById(lp.primarySkillId);
+    // Experience as it stands TODAY (entered value + time since), so the pills match what the profile shows.
+    final expNow = effectiveExperienceMonths(
+        years: lp.experienceYears,
+        months: lp.experienceMonths,
+        asOf: lp.experienceAsOf);
 
     return [
       Column(
@@ -163,16 +177,17 @@ class WorkStep extends StatelessWidget {
                 Pill(
                   n == 10 ? t['tenPlus'] : '$n',
                   compact: true,
-                  selected: lp.experienceYears == n,
+                  selected: expNow != null && experienceYearsPill(expNow) == n,
                   onTap: () => context.app.update(() {
                     lp.experienceYears = n;
                     lp.experienceIs10Plus = n == 10;
                     if (n != 0) lp.experienceMonths = null;
+                    lp.experienceAsOf = DateTime.now();
                   }),
                 ),
             ],
           ),
-          if (lp.experienceYears == 0) ...[
+          if (expNow != null && expNow < 12) ...[
             const SizedBox(height: 14),
             Text(t['experienceMonthsQ'],
                 style: const TextStyle(
@@ -187,9 +202,10 @@ class WorkStep extends StatelessWidget {
                 for (var m = 0; m < 12; m++)
                   Pill('$m ${t['monthsShort']}',
                       compact: true,
-                      selected: lp.experienceMonths == m,
+                      selected: lp.experienceMonths != null && expNow == m,
                       onTap: () => context.app.update(() {
                             lp.experienceMonths = m;
+                            lp.experienceAsOf = DateTime.now();
                             if (m != 0) lp.isFirstJob = null;
                           })),
               ],
@@ -465,6 +481,8 @@ class WorkStep extends StatelessWidget {
         ],
       ),
       const PhoneVerificationBlock(),
+      // The very last thing before completing the profile: accepting the Terms.
+      const TermsConsentCheck(),
     ];
   }
 }
@@ -479,6 +497,9 @@ class PhoneVerificationBlock extends StatelessWidget {
     final app = context.appWatch;
     final t = app.t;
     final lp = app.lp;
+    // The mobile number is the account's login. Once it is verified (or the user is signed in) it can no
+    // longer be edited here — changing it would break the link between the number and the account.
+    final locked = app.signedIn || lp.phoneVerified;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -488,7 +509,9 @@ class PhoneVerificationBlock extends StatelessWidget {
         Row(
           children: [
             Expanded(
-              child: AppTextField(
+              child: locked
+                  ? _LockedPhone(number: lp.mobileNumber)
+                  : AppTextField(
                 initial: lp.mobileNumber,
                 hint: t['mobilePlaceholder'],
                 digitsOnly: true,
@@ -505,7 +528,13 @@ class PhoneVerificationBlock extends StatelessWidget {
                     app.otpCode = '';
                     app.authError = '';
                     app.otpSentAt = null;
+                    app.otpResendCount = 0; // Reset resend counter for new number
                   }
+                  // A Firebase throttle is tied to the number it actually
+                  // saw — switching to a different number must never carry
+                  // a phantom cooldown over onto it.
+                  app.otpSendThrottledUntil = null;
+                  app.otpVerifyThrottledUntil = null;
                 }),
               ),
             ),
@@ -532,22 +561,23 @@ class PhoneVerificationBlock extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              _SideButton(
-                label: t['verify'],
-                enabled: app.otpCode.length == 6 && !app.otpSending,
-                onTap: () => context.app.verifyOtp(),
-              ),
+              _VerifyOtpButton(app: app, t: t),
             ],
           ),
           const SizedBox(height: 7),
           Text(
-            app.online ? t['otpSentHint'] : t['otpHintDemo'],
+            t['otpSentHint'],
             style: const TextStyle(fontSize: 11.5, color: C.mutedSoft),
           ),
         ],
         if (lp.phoneVerified) ...[
           const SizedBox(height: 10),
           CheckRow(t['phoneVerifiedLabel']),
+        ],
+        if (locked) ...[
+          const SizedBox(height: 7),
+          Text(t['phoneCannotChange'],
+              style: const TextStyle(fontSize: 11.5, color: C.mutedSoft)),
         ],
         if (app.authError.isNotEmpty) ...[
           const SizedBox(height: 10),
@@ -556,6 +586,34 @@ class PhoneVerificationBlock extends StatelessWidget {
       ],
     );
   }
+}
+
+/// The verified mobile number, shown but not editable.
+class _LockedPhone extends StatelessWidget {
+  const _LockedPhone({required this.number});
+  final String number;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        key: const ValueKey('lockedPhone'),
+        constraints: const BoxConstraints(minHeight: 54),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        decoration: BoxDecoration(
+          color: C.surfaceMuted,
+          border: Border.all(color: C.border),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(number,
+                  style: const TextStyle(
+                      fontSize: 16, letterSpacing: 0.4, color: C.textMid)),
+            ),
+            const Icon(Icons.lock_outline, size: 18, color: C.textSecondary),
+          ],
+        ),
+      );
 }
 
 class _SideButton extends StatelessWidget {
@@ -616,11 +674,13 @@ class _ResendOtpButtonState extends State<_ResendOtpButton> {
   }
 
   void _syncTimer() {
-    final active = widget.app.otpResendSecondsLeft > 0;
+    final active = widget.app.otpResendSecondsLeft > 0 ||
+        widget.app.otpSendThrottleSecondsLeft > 0;
     if (active && _timer == null) {
       _timer = Timer.periodic(const Duration(seconds: 1), (_) {
         if (!mounted) return;
-        if (widget.app.otpResendSecondsLeft <= 0) {
+        if (widget.app.otpResendSecondsLeft <= 0 &&
+            widget.app.otpSendThrottleSecondsLeft <= 0) {
           _timer?.cancel();
           _timer = null;
         }
@@ -645,17 +705,97 @@ class _ResendOtpButtonState extends State<_ResendOtpButton> {
     final lp = widget.lp;
     final cooldown = app.otpResendSecondsLeft;
     final onCooldown = app.otpSent && cooldown > 0;
+    // A Firebase-side throttle always wins over the ordinary cooldown: it
+    // means the last send/resend itself failed, so there is nothing to
+    // count down from except our own conservative local guess.
+    final throttleCooldown = app.otpSendThrottleSecondsLeft;
+    final throttled = throttleCooldown > 0;
     final label = app.otpSending
         ? '…'
-        : onCooldown
-            ? '${t['resendOtp']} (${cooldown}s)'
-            : app.otpSent
-                ? t['resendOtp']
-                : t['sendOtp'];
+        : throttled
+            ? '${t['resendOtp']} (${throttleCooldown}s)'
+            : onCooldown
+                ? '${t['resendOtp']} (${cooldown}s)'
+                : app.otpSent
+                    ? t['resendOtp']
+                    : t['sendOtp'];
     return _SideButton(
       label: label,
-      enabled: lp.mobileNumber.length == 10 && !app.otpSending && !onCooldown,
+      enabled: lp.mobileNumber.length == 10 &&
+          !app.otpSending &&
+          !onCooldown &&
+          !throttled,
       onTap: () => context.app.sendOtp(resend: app.otpSent),
+    );
+  }
+}
+
+/// The "Verify" button. Ticks its own countdown while a Firebase verify
+/// throttle is active, mirroring [_ResendOtpButton] — without a live
+/// countdown here, a throttled Verify would stay showing a stale, already
+/// wrong wait time until some unrelated rebuild happened to refresh it.
+class _VerifyOtpButton extends StatefulWidget {
+  const _VerifyOtpButton({required this.app, required this.t});
+  final AppState app;
+  final Str t;
+
+  @override
+  State<_VerifyOtpButton> createState() => _VerifyOtpButtonState();
+}
+
+class _VerifyOtpButtonState extends State<_VerifyOtpButton> {
+  Timer? _timer;
+
+  @override
+  void didUpdateWidget(covariant _VerifyOtpButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncTimer();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _syncTimer();
+  }
+
+  void _syncTimer() {
+    final active = widget.app.otpVerifyThrottleSecondsLeft > 0;
+    if (active && _timer == null) {
+      _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted) return;
+        if (widget.app.otpVerifyThrottleSecondsLeft <= 0) {
+          _timer?.cancel();
+          _timer = null;
+        }
+        setState(() {});
+      });
+    } else if (!active && _timer != null) {
+      _timer?.cancel();
+      _timer = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = widget.app;
+    final t = widget.t;
+    final throttleCooldown = app.otpVerifyThrottleSecondsLeft;
+    final throttled = throttleCooldown > 0;
+    final label = app.otpSending
+        ? '…'
+        : throttled
+            ? '${t['verify']} (${throttleCooldown}s)'
+            : t['verify'];
+    return _SideButton(
+      label: label,
+      enabled: app.otpCode.length == 6 && !app.otpSending && !throttled,
+      onTap: () => context.app.verifyOtp(),
     );
   }
 }

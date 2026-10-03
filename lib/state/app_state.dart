@@ -9,6 +9,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../backend/adapters.dart';
 import '../backend/backend.dart';
 import '../backend/models.dart';
+import '../backend/repositories.dart' show AuthRepository;
+import '../legal/legal_documents.dart';
 import '../data/catalog.dart';
 import '../data/strings.dart';
 import '../services/firebase_strings_service.dart';
@@ -104,6 +106,9 @@ enum Screen {
   vendorProfile,
   chatThread,
   blockedUsers,
+  terms,
+  termsDocument,
+  privacyDocument,
 }
 
 const Set<Screen> kHomeTierScreens = {
@@ -149,6 +154,9 @@ class Profile {
   int? experienceYears;
   bool experienceIs10Plus = false;
   int? experienceMonths;
+
+  /// When the experience above was entered; it keeps growing from this date (see backend/experience.dart).
+  DateTime? experienceAsOf;
   bool? isFirstJob;
   String preferredWorkArea = '';
   String mobileNumber = '';
@@ -186,6 +194,7 @@ class Profile {
         'experienceYears': experienceYears,
         'experienceIs10Plus': experienceIs10Plus,
         'experienceMonths': experienceMonths,
+        'experienceAsOf': experienceAsOf?.toIso8601String(),
         'isFirstJob': isFirstJob,
         'preferredWorkArea': preferredWorkArea,
         'mobileNumber': mobileNumber,
@@ -226,6 +235,7 @@ class Profile {
     p.experienceYears = j['experienceYears'];
     p.experienceIs10Plus = j['experienceIs10Plus'] ?? false;
     p.experienceMonths = j['experienceMonths'];
+    p.experienceAsOf = DateTime.tryParse('${j['experienceAsOf'] ?? ''}');
     p.isFirstJob = j['isFirstJob'];
     p.preferredWorkArea = j['preferredWorkArea'] ?? '';
     p.mobileNumber = j['mobileNumber'] ?? '';
@@ -324,10 +334,13 @@ class ChatMessage {
   final bool mine;
   final String text;
   final String time;
-  const ChatMessage(this.mine, this.text, this.time);
-  Map<String, dynamic> toJson() => {'mine': mine, 'text': text, 'time': time};
+  final String? senderId; // Added for blocking support
+  const ChatMessage(this.mine, this.text, this.time, {this.senderId});
+  Map<String, dynamic> toJson() =>
+      {'mine': mine, 'text': text, 'time': time, 'senderId': senderId};
   static ChatMessage fromJson(Map<String, dynamic> j) =>
-      ChatMessage(j['mine'] ?? false, j['text'] ?? '', j['time'] ?? '');
+      ChatMessage(j['mine'] ?? false, j['text'] ?? '', j['time'] ?? '',
+          senderId: j['senderId'] as String?);
 }
 
 class Listing {
@@ -368,7 +381,20 @@ class ContactTarget {
     this.chatJobId,
     this.chatPeerId,
   });
+
+  /// Chat exists only inside a job relationship (the rules require a jobId and
+  /// an application). A contact card without a job — e.g. from the Find
+  /// screens — offers no Send message.
+  bool get canChat =>
+      chatJobId != null &&
+      chatJobId!.isNotEmpty &&
+      chatPeerId != null &&
+      chatPeerId!.isNotEmpty;
 }
+
+/// How a chat message must be handled. `blocked` means "signed in, but there is
+/// no server thread": the message is refused, never faked locally.
+enum ChatSendMode { localDemo, live, blocked }
 
 /// The jobs a contractor is shown as already having posted.
 const List<Job> kSeedContractorJobs = [
@@ -415,6 +441,7 @@ class AppState extends ChangeNotifier {
   SharedPreferences? _prefs;
   final PincodeLookup _pincodeLookup = const LocalPincodeLookup();
   final IndiaPostPincodeLookup _indiaPost = const IndiaPostPincodeLookup();
+  Timer? _suspensionCheckTimer; // Periodic check for user suspension
 
   bool get online => backend != null;
   bool get signedIn => backend?.isSignedIn ?? false;
@@ -432,7 +459,8 @@ class AppState extends ChangeNotifier {
   String langCode = 'en';
   String get copyLang => copyLangFor(langCode);
   Str get t {
-    final firebaseStrings = FirebaseStringsService.getStringsForLanguage(langCode);
+    final firebaseStrings =
+        FirebaseStringsService.getStringsForLanguage(langCode);
     // If Firebase returns empty, fall back to hardcoded stringsFor()
     if (firebaseStrings.isEmpty) {
       return stringsFor(langCode);
@@ -483,6 +511,7 @@ class AppState extends ChangeNotifier {
   String dobError = '';
   bool otpSent = false;
   String otpCode = '';
+
   /// The number the current OTP session actually belongs to. Used to catch
   /// the case where a user sends an OTP, realises the number was wrong,
   /// edits it, and taps what is now labelled "Resend" — that must start a
@@ -492,9 +521,14 @@ class AppState extends ChangeNotifier {
 
   /// When the last OTP actually went out — drives the resend cooldown, so a
   /// user can't hammer "Resend" and trip Firebase's abuse rate-limit
-  /// ("too-many-requests") within seconds of the first send.
+  /// ("too-many-requests") within seconds of the first send. Persisted to handle
+  /// app closure during cooldown period.
   DateTime? otpSentAt;
+
+  /// Track resend count per phone number to prevent abuse (max 4 resends per session)
+  int otpResendCount = 0;
   static const Duration otpResendCooldown = Duration(seconds: 30);
+  static const int maxOtpResends = 4;
 
   /// Seconds left before "Resend OTP" is tappable again; 0 once it's clear.
   int get otpResendSecondsLeft {
@@ -502,6 +536,38 @@ class AppState extends ChangeNotifier {
     if (sentAt == null) return 0;
     final elapsed = DateTime.now().difference(sentAt);
     final left = otpResendCooldown - elapsed;
+    return left.isNegative ? 0 : left.inSeconds + 1;
+  }
+
+  /// Set when Firebase itself throttles a send/resend with
+  /// "too-many-requests". This is a *local* safety cooldown only — Firebase
+  /// never tells us its real unlock time, so [otpThrottleCooldown] is a
+  /// conservative guess, not a guarantee the number is clear afterwards.
+  /// Kept separate from [otpSentAt] because a throttled request never
+  /// succeeds, so it must never look like a fresh send to the resend timer.
+  DateTime? otpSendThrottledUntil;
+
+  /// Same as [otpSendThrottledUntil] but for a throttled *verification*
+  /// attempt (wrong-code guesses that tripped Firebase's abuse protection).
+  /// Tracked separately from the send-side throttle so the two phases never
+  /// show or clear each other's cooldown.
+  DateTime? otpVerifyThrottledUntil;
+
+  static const Duration otpThrottleCooldown = Duration(minutes: 2);
+
+  /// Seconds left on the local send/resend throttle cooldown; 0 once clear.
+  int get otpSendThrottleSecondsLeft {
+    final until = otpSendThrottledUntil;
+    if (until == null) return 0;
+    final left = until.difference(DateTime.now());
+    return left.isNegative ? 0 : left.inSeconds + 1;
+  }
+
+  /// Seconds left on the local verify throttle cooldown; 0 once clear.
+  int get otpVerifyThrottleSecondsLeft {
+    final until = otpVerifyThrottledUntil;
+    if (until == null) return 0;
+    final left = until.difference(DateTime.now());
     return left.isNegative ? 0 : left.inSeconds + 1;
   }
 
@@ -528,7 +594,8 @@ class AppState extends ChangeNotifier {
   String postTitle = '';
   String postSkill = 'Mason';
   String postWage = '';
-  String postLocation = ''; // site address (distinct from the user's own lp.* location)
+  String postLocation =
+      ''; // site address (distinct from the user's own lp.* location)
   String postCityDistrict = '';
   String postPincode = '';
   String get postPincodeError =>
@@ -585,6 +652,11 @@ class AppState extends ChangeNotifier {
       locationManual = d['locationManual'] ?? false;
       showExactDob = d['showExactDob'] ?? false;
       otpSent = d['otpSent'] ?? false;
+      // Restore OTP cooldown timestamp to persist across app restarts
+      final otpTimestamp = d['otpSentAt'] as String?;
+      if (otpTimestamp != null) {
+        otpSentAt = DateTime.parse(otpTimestamp);
+      }
       appliedJobIds = List<String>.from(d['appliedJobIds'] ?? const []);
       postedJobs = (d['postedJobs'] as List? ?? [])
           .map((e) => PostedJob.fromJson(Map<String, dynamic>.from(e)))
@@ -629,6 +701,9 @@ class AppState extends ChangeNotifier {
           saved != Screen.chatThread &&
           saved != Screen.contractorApplicants &&
           saved != Screen.blockedUsers &&
+          saved != Screen.terms &&
+          saved != Screen.termsDocument &&
+          saved != Screen.privacyDocument &&
           saved != Screen.splash) {
         screen = saved;
       }
@@ -668,6 +743,7 @@ class AppState extends ChangeNotifier {
         'locationManual': locationManual,
         'showExactDob': showExactDob,
         'otpSent': otpSent,
+        'otpSentAt': otpSentAt?.toIso8601String(),
         'appliedJobIds': appliedJobIds,
         'postedJobs': postedJobs.map((e) => e.toJson()).toList(),
         'applicantStatuses': applicantStatuses,
@@ -695,6 +771,11 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> resetDemo() async {
+    editingProfile = false;
+    termsChecked = false;
+    termsAcceptedVersion = null;
+    _afterTerms = null;
+    termsError = '';
     await _prefs?.remove(_sessionKey);
     screen = Screen.langSelect;
     role = null;
@@ -707,6 +788,11 @@ class AppState extends ChangeNotifier {
     dobError = '';
     otpSent = false;
     otpCode = '';
+    otpSentAt = null;
+    _otpSentForNumber = null;
+    otpResendCount = 0;
+    otpSendThrottledUntil = null;
+    otpVerifyThrottledUntil = null;
     jobSkillFilter = '';
     workerSkillFilter = '';
     searchMode = 'contractors';
@@ -785,6 +871,11 @@ class AppState extends ChangeNotifier {
   };
 
   void goBack() {
+    // Terms acceptance cannot be skipped; the documents return to where they were opened from.
+    if (screen == Screen.terms) return;
+    if (screen == Screen.termsDocument || screen == Screen.privacyDocument) {
+      return go(legalBackScreen);
+    }
     if (screen == Screen.chatThread) return go(chatBackScreen);
     if (screen == Screen.contractorWorkerDetail) return go(workerDetailBack);
     if (screen == Screen.blockedUsers) {
@@ -803,6 +894,153 @@ class AppState extends ChangeNotifier {
       });
 
   bool get showBottomNav => kHomeTierScreens.contains(screen);
+
+  // ---------------------------------------------------------------- terms
+
+  /// The unchecked-by-default box on onboarding step 3. Ticking it is what allows an OTP to be sent.
+  bool termsChecked = false;
+
+  /// The Terms version this user has accepted, as recorded server-side (null = never accepted).
+  String? termsAcceptedVersion;
+  bool termsSaving = false;
+  String termsError = '';
+  Screen legalBackScreen = Screen.terms;
+  Screen _termsReturnScreen = Screen.langSelect;
+  Future<void> Function()? _afterTerms;
+
+  /// True when [accepted] is not the [current] Terms version (never accepted, or an older version).
+  static bool needsTermsAcceptance(String? accepted,
+          [String current = kTermsVersion]) =>
+      accepted != current;
+
+  /// Offline demo and signed-out states have nothing to record; a signed-in user must have accepted the current version.
+  bool get termsCurrent =>
+      backend == null ||
+      !signedIn ||
+      !needsTermsAcceptance(termsAcceptedVersion);
+
+  /// Whether the final onboarding button may be pressed: the step must be valid AND the Terms either ticked
+  /// (about to be recorded) or already accepted at the current version.
+  static bool canCompleteProfile({
+    required bool stepValid,
+    required bool termsChecked,
+    required bool termsCurrent,
+  }) =>
+      stepValid && (termsChecked || termsCurrent);
+
+  /// A signed-in user whose stored acceptance is the current version is never shown the consent box.
+  bool get termsAlreadyAccepted =>
+      backend != null &&
+      signedIn &&
+      !needsTermsAcceptance(termsAcceptedVersion);
+
+  void openLegalDocument({required bool terms}) => update(() {
+        legalBackScreen = screen;
+        screen = terms ? Screen.termsDocument : Screen.privacyDocument;
+      });
+
+  Future<void> _cacheTerms(String uid, String? version) async {
+    final p = _prefs;
+    if (p == null) return;
+    if (version == null) {
+      await p.remove('termsVersion_$uid');
+    } else {
+      await p.setString('termsVersion_$uid', version);
+    }
+  }
+
+  /// Reads the accepted version from the server (the source of truth). If the read fails, the last
+  /// server-confirmed value cached on this device is used; with neither, acceptance stays "unknown" and
+  /// the gate is shown — acceptance is never assumed.
+  Future<void> refreshTermsStatus() async {
+    final api = backend;
+    final id = api?.uid;
+    if (api == null || id == null) return;
+    try {
+      final v = await api.users.fetchTermsVersion(id);
+      termsAcceptedVersion = v;
+      await _cacheTerms(id, v);
+    } catch (_) {
+      termsAcceptedVersion ??= _prefs?.getString('termsVersion_$id');
+    }
+  }
+
+  /// Records acceptance of [kTermsVersion] with a server-generated timestamp.
+  Future<bool> acceptTerms() async {
+    final api = backend;
+    final id = api?.uid;
+    if (api == null || id == null) return false;
+    update(() {
+      termsSaving = true;
+      termsError = '';
+    });
+    try {
+      await api.users.acceptTerms(id, kTermsVersion);
+      termsAcceptedVersion = kTermsVersion;
+      await _cacheTerms(id, kTermsVersion);
+      update(() => termsSaving = false);
+      return true;
+    } catch (_) {
+      update(() {
+        termsSaving = false;
+        termsError = t['termsSaveFailed'];
+      });
+      return false;
+    }
+  }
+
+  /// "Accept & Continue" on the stand-alone gate screen.
+  Future<void> acceptTermsAndContinue() async {
+    if (!await acceptTerms()) return;
+    final next = _afterTerms;
+    _afterTerms = null;
+    update(() => screen = _termsReturnScreen);
+    if (next != null) await next();
+  }
+
+  void _openTermsGate({Future<void> Function()? then}) {
+    _afterTerms = then;
+    if (screen != Screen.terms) _termsReturnScreen = screen;
+    update(() {
+      termsError = '';
+      screen = Screen.terms;
+    });
+  }
+
+  /// UGC guard: a signed-in user who has not accepted the current Terms is sent to the gate instead.
+  bool _blockedByTerms() {
+    if (termsCurrent) return false;
+    _openTermsGate();
+    return true;
+  }
+
+  /// App start for a returning, signed-in user. A cached acceptance of the current version lets them in
+  /// at once (re-verified in the background); otherwise the server is asked before they reach any content.
+  Future<void> checkTermsOnStart() async {
+    final api = backend;
+    final id = api?.uid;
+    if (api == null || id == null || role == null) return;
+    final cached = _prefs?.getString('termsVersion_$id');
+    if (cached == kTermsVersion) {
+      termsAcceptedVersion = cached;
+      unawaited(_verifyTermsInBackground(api, id));
+      return;
+    }
+    await refreshTermsStatus()
+        .timeout(const Duration(seconds: 4), onTimeout: () {});
+    if (!termsCurrent) _openTermsGate();
+  }
+
+  Future<void> _verifyTermsInBackground(Backend api, String id) async {
+    try {
+      final v = await api.users.fetchTermsVersion(id);
+      termsAcceptedVersion = v;
+      await _cacheTerms(id, v);
+    } catch (_) {
+      return; // Offline: keep the cached acceptance; only a successful read can revoke it.
+    }
+    if (!termsCurrent) _openTermsGate();
+  }
 
   // ------------------------------------------------------------- profile
 
@@ -826,14 +1064,11 @@ class AppState extends ChangeNotifier {
         }
       });
 
-  /// Labourers and contractors can't be under [kMinAgeYears] — the stepper
-  /// itself must not let them dial down to an under-age value in the first
-  /// place, rather than relying on the "Continue" button's check to catch
-  /// it afterwards. A client isn't working the job themselves, so they keep
-  /// the wider floor.
+  /// UniShram is 18+ for every role (labourer, contractor, client and vendor): the stepper itself must
+  /// not let anyone dial down to an under-age value in the first place, rather than relying on the
+  /// "Continue" button's check to catch it afterwards.
   void setAge(int n) => update(() {
-        final floor = role == Role.client ? 13 : kMinAgeYears;
-        lp.age = n.clamp(floor, 100);
+        lp.age = n.clamp(kMinAgeYears, 100);
         dobError = '';
       });
 
@@ -946,7 +1181,7 @@ class AppState extends ChangeNotifier {
             ? ''
             : age == null
                 ? t['dobInvalid']
-                : (role != Role.client && age < kMinAgeYears)
+                : (age < kMinAgeYears)
                     ? t['minAgeError']
                     : '';
       });
@@ -956,7 +1191,7 @@ class AppState extends ChangeNotifier {
       lp.gender.isNotEmpty &&
       (lp.city.trim().isNotEmpty || lp.district.trim().isNotEmpty) &&
       lp.state.isNotEmpty &&
-      (role == Role.client || lp.age != null || lp.dateOfBirth.isNotEmpty);
+      (lp.age != null || lp.dateOfBirth.isNotEmpty);
 
   String? get primaryCategory => lp.primarySkillId == null
       ? null
@@ -1054,11 +1289,11 @@ class AppState extends ChangeNotifier {
     if (lp.dateOfBirth.isNotEmpty) {
       final age = ageFromDob(lp.dateOfBirth);
       if (age == null) return update(() => dobError = t['dobInvalid']);
-      if (role != Role.client && age < kMinAgeYears) {
+      if (age < kMinAgeYears) {
         return update(() => dobError = t['minAgeError']);
       }
     }
-    if (role != Role.client && lp.age != null && lp.age! < kMinAgeYears) {
+    if (lp.age != null && lp.age! < kMinAgeYears) {
       return update(() => dobError = t['minAgeError']);
     }
     if (!personalValid) return;
@@ -1070,27 +1305,103 @@ class AppState extends ChangeNotifier {
 
   void continueFromWork() {
     if (!workValid) return;
-    if (role == Role.client) return completeProfile();
+    if (role == Role.client) {
+      unawaited(completeProfile());
+      return;
+    }
     go(Screen.profileContact);
   }
 
-  void completeProfile() {
+  /// True while a signed-in user is changing their existing profile (Edit profile), as opposed to
+  /// creating it for the first time. Drives the "Update your profile" wording.
+  bool editingProfile = false;
+
+  /// Opens the profile steps for an existing account.
+  void beginEditProfile() => update(() {
+        editingProfile = true;
+        screen = Screen.profilePersonal;
+      });
+
+  Future<void> completeProfile() async {
     if (role != Role.client && !contactValid) return;
     if (role == Role.client && !lp.phoneVerified) return;
+    if (!termsCurrent) {
+      // Last step: the Terms box must be ticked; acceptance is recorded (version + server timestamp) before
+      // the profile is created.
+      if (!termsChecked) {
+        update(() => termsError = t['termsMustAccept']);
+        return;
+      }
+      if (!await acceptTerms()) return;
+      _startSuspensionCheck();
+      await _flushPendingUploads();
+    }
+    final wasEditing = editingProfile;
     update(() {
+      editingProfile = false;
       screen = defaultScreenFor(role ?? Role.labourer);
-      toast = t['profileCompleteToast'];
+      toast = wasEditing ? t['profileUpdatedToast'] : t['profileCompleteToast'];
     });
     clearToastLater();
     unawaited(pushProfile());
   }
 
+  /// Photos picked before the Terms were accepted stay on the device; they upload once acceptance is recorded.
+  Future<void> _flushPendingUploads() async {
+    final api = backend;
+    if (api == null || !api.isSignedIn || !termsCurrent) return;
+    if (lp.profilePicture.isNotEmpty && !lp.profilePicture.startsWith('http')) {
+      try {
+        final url = await api.uploadProfilePhoto(File(lp.profilePicture));
+        update(() => lp.profilePicture = url);
+      } catch (_) {}
+    }
+    for (var i = 0; i < lp.workPhotos.length; i++) {
+      final path = lp.workPhotos[i];
+      if (path.startsWith('http')) continue;
+      try {
+        final url = await api.uploadWorkPhoto(File(path));
+        update(() => lp.workPhotos[i] = url);
+      } catch (_) {}
+    }
+  }
+
   // ------------------------------------------------------------------ OTP
+
+  /// The friendly message, plus Firebase's own error code in brackets when the app has no specific
+  /// wording for it (so one screenshot is enough to tell what went wrong).
+  String authErrorText(String key, String? code) =>
+      authErrorWithCode(t[key], key, code);
+
+  static String authErrorWithCode(String text, String key, String? code) =>
+      (key == 'authErrorGeneric' && code != null && code.isNotEmpty)
+          ? '$text ($code)'
+          : text;
+
+  /// Validates Indian phone number: must be 10 digits, start with 6-9, not all same digit.
+  bool _isValidIndianPhone(String phone) {
+    if (phone.length != 10) return false;
+    final first = phone[0];
+    if (first != '6' && first != '7' && first != '8' && first != '9')
+      return false;
+    // Reject all-same-digit patterns (e.g., 9999999999, 8888888888)
+    return !phone.split('').every((digit) => digit == phone[0]);
+  }
 
   /// Sends a real SMS through Firebase Phone Auth. Without a backend the demo
   /// path is used instead, so the UI can still be exercised.
   Future<void> sendOtp({bool resend = false}) async {
-    if (lp.mobileNumber.length != 10) return;
+    if (!_isValidIndianPhone(lp.mobileNumber)) {
+      update(() => authError = t['authErrorInvalidPhone']);
+      return;
+    }
+    // Belt-and-braces alongside the UI disabling the button during a local
+    // throttle cooldown — never let a send/resend through early even if
+    // something else triggers this call.
+    if (otpSendThrottleSecondsLeft > 0) {
+      update(() => authError = t['authErrorSendThrottled']);
+      return;
+    }
     // A "resend" only means something for the number the last OTP actually
     // went to. If the number has changed since then (the user spotted a
     // typo and fixed it), this must be a fresh send — reusing the old
@@ -1098,16 +1409,29 @@ class AppState extends ChangeNotifier {
     // drop the request, so none of the callbacks below ever fire and the
     // button looks stuck forever.
     final isResend = resend && _otpSentForNumber == lp.mobileNumber;
+
+    // Reset resend count if number changed (fresh verification session)
+    if (_otpSentForNumber != null && _otpSentForNumber != lp.mobileNumber) {
+      otpResendCount = 0;
+    }
+
+    // Prevent abuse: max 4 resends per phone number per session
+    if (isResend && otpResendCount >= maxOtpResends) {
+      update(() => authError = t['authErrorTooManyAttempts']);
+      return;
+    }
+
     // Belt-and-braces alongside the UI disabling the button during the
     // cooldown — never let a resend through early even if something else
     // triggers this call.
     if (isResend && otpResendSecondsLeft > 0) return;
     final api = backend;
     if (api == null) {
+      // Firebase Phone Auth is NOT available. Production must NEVER silently
+      // accept arbitrary OTP codes. Fail closed: show an error and stop.
       update(() {
-        otpSent = true;
-        otpCode = '';
-        otpSentAt = DateTime.now();
+        authError = t['authErrorNetwork'] ??
+            'Phone verification service unavailable. Check your internet connection and try again.';
       });
       return;
     }
@@ -1115,6 +1439,9 @@ class AppState extends ChangeNotifier {
       otpSending = true;
       authError = '';
     });
+    // api.auth.sendOtp never throws — it always resolves and calls exactly
+    // one of the callbacks below, including for a rejected verifyPhoneNumber
+    // Future (see AuthRepository.sendOtp), so no try/catch is needed here.
     await api.auth.sendOtp(
       phone: lp.mobileNumber,
       resend: isResend,
@@ -1124,27 +1451,59 @@ class AppState extends ChangeNotifier {
         otpCode = '';
         _otpSentForNumber = lp.mobileNumber;
         otpSentAt = DateTime.now();
+        if (isResend) otpResendCount++;
       }),
       // Android can read the SMS itself, which signs the user in with no typing.
       onVerified: (_) async {
         update(() {
           otpSending = false;
           lp.phoneVerified = true;
+          authError = '';
         });
         await _afterSignIn();
       },
       onError: (errorKey) => update(() {
         otpSending = false;
-        authError = t[errorKey];
+        if (errorKey == 'authErrorTooManyAttempts') {
+          // Firebase itself throttled this send/resend. It gives no unlock
+          // time, so this is a conservative local guess, not a guarantee.
+          otpSendThrottledUntil = DateTime.now().add(otpThrottleCooldown);
+          authError = t['authErrorSendThrottled'];
+        } else {
+          authError =
+              authErrorText(errorKey, AuthRepository.lastUnrecognisedCode);
+        }
       }),
     );
   }
 
   Future<void> verifyOtp() async {
     if (otpCode.length < 6) return;
+    // Belt-and-braces alongside the UI disabling Verify during a local
+    // throttle cooldown — never let a verify attempt through early even if
+    // something else triggers this call.
+    if (otpVerifyThrottleSecondsLeft > 0) {
+      update(() => authError = t['authErrorVerifyThrottled']);
+      return;
+    }
+    // Check if OTP has expired (Firebase timeout is 60 seconds), but only if
+    // we haven't already successfully verified the phone number.
+    final sentAt = otpSentAt;
+    if (!lp.phoneVerified && sentAt != null && DateTime.now().difference(sentAt).inSeconds > 60) {
+      update(() {
+        authError = t['authErrorSessionExpired'];
+        otpCode = '';
+      });
+      return;
+    }
     final api = backend;
     if (api == null) {
-      update(() => lp.phoneVerified = true);
+      // Firebase Phone Auth is NOT available. Production must NEVER silently
+      // accept arbitrary OTP codes. Fail closed: show an error and stop.
+      update(() {
+        authError = t['authErrorNetwork'] ??
+            'Phone verification service unavailable. Check your internet connection and try again.';
+      });
       return;
     }
     update(() {
@@ -1155,13 +1514,30 @@ class AppState extends ChangeNotifier {
       await api.auth.verifyOtp(otpCode);
       update(() {
         otpSending = false;
+        // Mark as verified after Firebase confirms
         lp.phoneVerified = true;
+        authError = '';
       });
       await _afterSignIn();
     } catch (e) {
+      final key = e is String ? e : 'authErrorGeneric';
+      final throttled = key == 'authErrorTooManyAttempts';
       update(() {
         otpSending = false;
-        authError = t[e is String ? e : 'authErrorGeneric'];
+        // Do NOT mark as verified if authentication failed
+        lp.phoneVerified = false;
+        if (throttled) {
+          // Firebase itself throttled this verify attempt. It gives no
+          // unlock time, so this is a conservative local guess, not a
+          // guarantee. The code the user already typed may still be valid
+          // once the restriction lifts, so it's deliberately kept (not
+          // cleared like every other failure below).
+          otpVerifyThrottledUntil = DateTime.now().add(otpThrottleCooldown);
+          authError = t['authErrorVerifyThrottled'];
+        } else {
+          authError = authErrorText(key, AuthRepository.lastUnrecognisedCode);
+          otpCode = '';
+        }
       });
     }
   }
@@ -1173,7 +1549,33 @@ class AppState extends ChangeNotifier {
     if (api == null) return;
     await api.registerForPush();
     await syncFromServer();
+
+    // Check if session was revoked (e.g., due to abuse or admin action)
+    final id = api.uid;
+    if (id != null) {
+      final userDoc = await api.users.fetch(id);
+      if (userDoc?.sessionRevoked ?? false) {
+        await signOut();
+        update(() {
+          authError = t['sessionRevokedError'] ??
+              'Session has been revoked. Please sign in again.';
+          screen = Screen.splash;
+        });
+        return;
+      }
+    }
+
+    // Terms are accepted at the very end of onboarding ("Complete profile", after the box at the bottom of
+    // step 3 is ticked). Until the current version is accepted, no profile is written — the user simply
+    // stays on step 3. A returning user who already accepted this version continues straight away.
+    await refreshTermsStatus();
+    if (!termsCurrent) return;
+    await _finishSignIn();
+  }
+
+  Future<void> _finishSignIn() async {
     await pushProfile();
+    _startSuspensionCheck(); // Monitor for suspension changes
   }
 
   /// Overwrites local state with the server's copy when one exists.
@@ -1183,6 +1585,7 @@ class AppState extends ChangeNotifier {
     if (api == null || id == null) return;
     final doc = await api.users.fetch(id);
     if (doc == null) return;
+    final ownPhone = await api.users.fetchOwnPhone(id, legacy: doc.phone);
     update(() {
       role = roleFromKey(doc.role) ?? role;
       lp.fullName = doc.fullName;
@@ -1200,10 +1603,11 @@ class AppState extends ChangeNotifier {
       lp.additionalSkillIds = [...doc.additionalSkillIds];
       lp.experienceYears = doc.experienceYears;
       lp.experienceMonths = doc.experienceMonths;
+      lp.experienceAsOf = doc.experienceAsOf;
       lp.preferredWorkArea = doc.preferredWorkArea;
       lp.expectedWage = doc.expectedWage == 0 ? '' : '${doc.expectedWage}';
       lp.availability = doc.availability;
-      lp.mobileNumber = doc.phone.isEmpty ? lp.mobileNumber : doc.phone;
+      lp.mobileNumber = ownPhone.isEmpty ? lp.mobileNumber : ownPhone;
       lp.phoneVerified = doc.phoneVerified || lp.phoneVerified;
       lp.profilePicture =
           doc.photoUrl.isEmpty ? lp.profilePicture : doc.photoUrl;
@@ -1243,31 +1647,41 @@ class AppState extends ChangeNotifier {
 
   /// Writes the local profile up. Called at each onboarding step so a dropped
   /// connection never loses what the worker already typed.
-  /// Saves the profile, retrying once after a short delay on failure before
+  /// Saves the profile with exponential backoff retries (max 3 attempts) before
   /// showing an error. Firebase's ID token isn't always immediately ready
   /// for a Firestore write in the instant right after sign-in resolves —
   /// this is the very first write a brand-new account ever makes, right on
   /// the heels of verifyOtp, so it's exactly where that race condition
-  /// bites hardest. A silent retry fixes the common case instead of
-  /// scaring a new user with "could not save" on their first ever save.
+  /// bites hardest. Exponential backoff (900ms → 1800ms) fixes the common case.
   Future<void> pushProfile() async {
     final api = backend;
     final id = api?.uid;
     if (api == null || id == null || role == null) return;
-    try {
-      await _savePushedProfile(api, id);
-    } catch (_) {
-      await Future.delayed(const Duration(milliseconds: 900));
+    if (!termsCurrent)
+      return; // No profile is written before the Terms are accepted.
+    for (int attempt = 0; attempt < 3; attempt++) {
       try {
         await _savePushedProfile(api, id);
-      } catch (e) {
-        authError = t['authErrorSaveProfile'];
-        notifyListeners();
+        return; // Success - profile saved, state is consistent
+      } catch (_) {
+        if (attempt == 2) {
+          // Final attempt failed - revert phoneVerified to prevent inconsistent state
+          update(() {
+            lp.phoneVerified = false;
+            authError = t['authErrorSaveProfile'];
+          });
+          return;
+        }
+        // Exponential backoff: 900ms, then 1800ms
+        final delayMs = 900 * (attempt + 1);
+        await Future.delayed(Duration(milliseconds: delayMs));
       }
     }
   }
 
   Future<void> _savePushedProfile(Backend api, String id) async {
+    // Profiles saved before experience tracked time start counting from their first save after the update.
+    if (lp.experienceYears != null) lp.experienceAsOf ??= DateTime.now();
     {
       await api.users.save(UserDoc(
         uid: id,
@@ -1289,6 +1703,7 @@ class AppState extends ChangeNotifier {
         additionalSkillIds: lp.additionalSkillIds,
         experienceYears: lp.experienceYears,
         experienceMonths: lp.experienceMonths,
+        experienceAsOf: lp.experienceAsOf,
         preferredWorkArea: lp.preferredWorkArea,
         expectedWage: int.tryParse(lp.expectedWage) ?? 0,
         availability: lp.availability,
@@ -1314,6 +1729,8 @@ class AppState extends ChangeNotifier {
     update(() => lp.profilePicture = localPath);
     final api = backend;
     if (api == null || !api.isSignedIn) return;
+    if (!termsCurrent)
+      return; // held on the device until the Terms are accepted
     try {
       final url = await api.uploadProfilePhoto(File(localPath));
       update(() => lp.profilePicture = url);
@@ -1328,6 +1745,8 @@ class AppState extends ChangeNotifier {
         lp.workPhotos = [...lp.workPhotos, ...localPaths].take(6).toList());
     final api = backend;
     if (api == null || !api.isSignedIn) return;
+    if (!termsCurrent)
+      return; // held on the device until the Terms are accepted
     for (final path in localPaths) {
       try {
         final url = await api.uploadWorkPhoto(File(path));
@@ -1343,6 +1762,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> signOut() async {
+    _stopSuspensionCheck(); // Stop monitoring suspension
     final api = backend;
     if (api != null) {
       await api.unregisterPush();
@@ -1357,6 +1777,50 @@ class AppState extends ChangeNotifier {
     if (api == null) return resetDemo();
     await api.deleteAccount();
     await resetDemo();
+  }
+
+  /// Starts periodic suspension checks (every 5 minutes). Signs user out if suspended.
+  void _startSuspensionCheck() {
+    _suspensionCheckTimer?.cancel();
+    _suspensionCheckTimer =
+        Timer.periodic(const Duration(minutes: 5), (_) async {
+      final api = backend;
+      final id = api?.uid;
+      if (api == null || id == null || !signedIn) return;
+      try {
+        final user = await api.users.fetch(id);
+        if (user?.suspended ?? false) {
+          // User is suspended - force sign out
+          await signOut();
+          update(() {
+            authError = t['userSuspendedError'];
+            screen = Screen.splash;
+          });
+        }
+      } catch (_) {
+        // Ignore errors - suspension check is non-critical
+      }
+    });
+  }
+
+  /// Stops the suspension check timer.
+  void _stopSuspensionCheck() {
+    _suspensionCheckTimer?.cancel();
+    _suspensionCheckTimer = null;
+  }
+
+  /// Retries a Future with exponential backoff (max 3 attempts)
+  Future<T> _retryWithBackoff<T>(Future<T> Function() operation) async {
+    for (int attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await operation();
+      } catch (e) {
+        if (attempt == 2) rethrow; // Final attempt failed
+        final delayMs = 500 * (attempt + 1); // 500ms, 1000ms
+        await Future.delayed(Duration(milliseconds: delayMs));
+      }
+    }
+    throw Exception('Max retries exceeded');
   }
 
   // ------------------------------------------------------------ job feed
@@ -1443,11 +1907,9 @@ class AppState extends ChangeNotifier {
     clearToastLater();
   }
 
-  List<Job> get myPostedJobs =>
-      postedJobs.map((e) => e.toJob()).toList();
+  List<Job> get myPostedJobs => postedJobs.map((e) => e.toJob()).toList();
 
-  int applicantCountFor(String jobId) =>
-      kApplicantsByJob[jobId]?.length ?? 0;
+  int applicantCountFor(String jobId) => kApplicantsByJob[jobId]?.length ?? 0;
 
   List<Worker> applicantsFor(String? jobId) =>
       (kApplicantsByJob[jobId] ?? const [])
@@ -1472,13 +1934,39 @@ class AppState extends ChangeNotifier {
       _lastJobPostAt != null &&
       DateTime.now().difference(_lastJobPostAt!) < kJobPostCooldown;
 
+  /// Seconds remaining before next job can be posted; 0 if not on cooldown.
+  int get postJobCooldownSecondsLeft {
+    final lastPost = _lastJobPostAt;
+    if (lastPost == null) return 0;
+    final elapsed = DateTime.now().difference(lastPost).inSeconds;
+    final remaining = kJobPostCooldown.inSeconds - elapsed;
+    return remaining > 0 ? remaining : 0;
+  }
+
   void postJob() {
-    if (postTitle.trim().isEmpty ||
-        postWage.isEmpty ||
-        postWageBelowMin ||
-        postPincodeError.isNotEmpty ||
-        postHoursError.isNotEmpty ||
-        postJobOnCooldown) {
+    if (postTitle.trim().isEmpty) {
+      showToast(t['jobTitleRequired']);
+      return;
+    }
+    if (postWage.isEmpty) {
+      showToast(t['wageRequired']);
+      return;
+    }
+    if (postWageBelowMin) {
+      showToast(t['wageTooLowError']);
+      return;
+    }
+    if (postPincodeError.isNotEmpty) {
+      showToast(postPincodeError);
+      return;
+    }
+    if (postHoursError.isNotEmpty) {
+      showToast(postHoursError);
+      return;
+    }
+    if (postJobOnCooldown) {
+      showToast(
+          '${t['tryAgainIn']} ${postJobCooldownSecondsLeft}${t['secondsShort']}');
       return;
     }
     _lastJobPostAt = DateTime.now();
@@ -1826,6 +2314,7 @@ class AppState extends ChangeNotifier {
     )
         .map((docs) {
       final jobs = docs
+          .where((d) => d.status != 'filled')
           .map((d) => d.toJob(viewerLocation: _myLocation))
           .where((j) => !isBlocked(j.contractorUid))
           .toList();
@@ -1913,6 +2402,30 @@ class AppState extends ChangeNotifier {
   static bool isApprovedStatus(String status) =>
       status == 'shortlisted' || status == 'hired';
 
+  /// True when opening a chat would put the user in a thread with themselves
+  /// (Message on a job they posted, or a peer id equal to their own uid).
+  static bool isSelfChat(String? peerId, String? myUid) =>
+      myUid != null && peerId != null && peerId == myUid;
+
+  /// A live chat needs a signed-in user, a real other user (not me, not the
+  /// 'me' placeholder) and a job — direct, job-less chats are not supported.
+  static bool canOpenLiveChat({String? peerId, String? myUid, String? jobId}) =>
+      myUid != null &&
+      peerId != null &&
+      peerId.isNotEmpty &&
+      peerId != 'me' &&
+      !isSelfChat(peerId, myUid) &&
+      jobId != null &&
+      jobId.isNotEmpty;
+
+  /// Offline demo (no backend / not signed in) may use the local sample chat;
+  /// a signed-in user without a server thread must never get a fake one.
+  static ChatSendMode chatSendMode(
+          {required bool liveBackend, required bool hasThread}) =>
+      !liveBackend
+          ? ChatSendMode.localDemo
+          : (hasThread ? ChatSendMode.live : ChatSendMode.blocked);
+
   /// My own application for one specific job, if any — used to decide
   /// whether I may see the contractor's phone number for it yet. A worker can
   /// always message a contractor about a job; calling them is gated on this.
@@ -1957,7 +2470,7 @@ class AppState extends ChangeNotifier {
         )
         .map((docs) => docs
             .map((d) => d.toWorker())
-            .where((w) => !isBlocked(w.id))
+            .where((w) => w.id != uid && !isBlocked(w.id))
             .toList());
   }
 
@@ -1976,7 +2489,7 @@ class AppState extends ChangeNotifier {
         )
         .map((docs) => docs
             .map((d) => d.toContractor())
-            .where((c) => !isBlocked(c.id))
+            .where((c) => c.id != uid && !isBlocked(c.id))
             .toList());
   }
 
@@ -2018,6 +2531,8 @@ class AppState extends ChangeNotifier {
     final api = backend;
     final id = api?.uid;
     if (api == null || id == null) return 'offline';
+    if (_blockedByTerms()) return 'offline';
+    if (aboutUserId == id) return 'self';
     // Keyed by job + rater + the person being rated, so a contractor rating
     // several workers hired on the same job gets one doc each, not one
     // shared doc that only the first rating can ever occupy.
@@ -2054,6 +2569,20 @@ class AppState extends ChangeNotifier {
     return doc.exists;
   }
 
+  /// Fetch contractor contact info from protected collection. Only approved
+  /// applicants should call this. Returns null if not found or offline.
+  Future<Map<String, dynamic>?> getContractorContact(String jobId) async {
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('contractorContacts')
+          .doc(jobId)
+          .get();
+      return doc.data();
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// A job counts as ripe for the forced rating prompt once its end date has
   /// arrived — not before, and not indefinitely after (14 days, so an old
   /// unrated job doesn't nag forever).
@@ -2083,7 +2612,8 @@ class AppState extends ChangeNotifier {
         if (!_ratingWindowOpen(job.endDate)) continue;
         List<ApplicationDoc> apps;
         try {
-          apps = await applicationsForJob(job.id).first
+          apps = await applicationsForJob(job.id)
+              .first
               .timeout(const Duration(seconds: 4));
         } catch (_) {
           continue;
@@ -2134,7 +2664,8 @@ class AppState extends ChangeNotifier {
   /// Rates the app itself (not another user) — one doc per signed-in user,
   /// upserted on every submission, feeding into overall product feedback.
   /// Returns false when there's no signed-in backend user to attribute it to.
-  Future<bool> submitAppRating({required int rating, String comment = ''}) async {
+  Future<bool> submitAppRating(
+      {required int rating, String comment = ''}) async {
     final api = backend;
     final id = api?.uid;
     if (api == null || id == null) return false;
@@ -2155,10 +2686,8 @@ class AppState extends ChangeNotifier {
     final api = backend;
     final id = api?.uid;
     if (api == null || id == null) return false;
-    final doc = await FirebaseFirestore.instance
-        .collection('appRatings')
-        .doc(id)
-        .get();
+    final doc =
+        await FirebaseFirestore.instance.collection('appRatings').doc(id).get();
     return doc.exists;
   }
 
@@ -2229,9 +2758,9 @@ class AppState extends ChangeNotifier {
         .doc(threadId)
         .snapshots()
         .map((doc) {
-          final v = (doc.data()?['unread'] as Map?)?[id];
-          return v is num ? v.toInt() : 0;
-        });
+      final v = (doc.data()?['unread'] as Map?)?[id];
+      return v is num ? v.toInt() : 0;
+    });
   }
 
   /// Total unread messages across every applicant thread on one of my
@@ -2272,7 +2801,8 @@ class AppState extends ChangeNotifier {
 
   Stream<List<ChatMessage>> messageFeed() {
     final api = backend;
-    if (api == null || _threadId == null) return Stream.value(chatThread);
+    if (api == null || uid == null) return Stream.value(chatThread);
+    if (_threadId == null) return Stream.value(const <ChatMessage>[]);
     return api.chat.watchMessages(_threadId!).map((docs) => docs.map((m) {
           final sent = m.sentAt;
           return ChatMessage(
@@ -2303,6 +2833,7 @@ class AppState extends ChangeNotifier {
     final id = api?.uid;
     if (api == null || id == null) return applyToSelectedJob();
     if (appliedJobIds.contains(job.id)) return;
+    if (_blockedByTerms()) return;
     try {
       await api.applications.apply(ApplicationDoc(
         id: ApplicationDoc.idFor(job.id, id),
@@ -2339,6 +2870,7 @@ class AppState extends ChangeNotifier {
         postJobOnCooldown) {
       return;
     }
+    if (_blockedByTerms()) return;
     _lastJobPostAt = DateTime.now();
     try {
       await api.jobs.post(JobDoc(
@@ -2346,7 +2878,8 @@ class AppState extends ChangeNotifier {
         postedBy: id,
         contractorName:
             lp.businessName.isNotEmpty ? lp.businessName : displayName,
-        contractorPhone: lp.mobileNumber,
+        contractorPhone:
+            '', // Private: fetched from contractorContacts collection instead
         title: postTitle.trim(),
         skill: postSkill,
         description: postDescription.trim(),
@@ -2356,7 +2889,7 @@ class AppState extends ChangeNotifier {
         address: postLocation.trim(),
         area: postCityDistrict.trim(),
         pincode: postPincode.trim(),
-        state: lp.state,
+        state: _postJobState,
         location: _myLocation,
         startDate: DateTime.tryParse(postStartDate),
         endDate: DateTime.tryParse(postEndDate),
@@ -2388,9 +2921,34 @@ class AppState extends ChangeNotifier {
       String jobId, String workerId, String status) async {
     final api = backend;
     if (api == null) return setApplicantStatus(jobId, workerId, status);
+
+    // Optimistic update: show status change immediately
+    final appId = ApplicationDoc.idFor(jobId, workerId);
+    final oldStatus = applicantStatuses[appId];
+    update(() => applicantStatuses[appId] = status);
+
     try {
-      await api.applications
-          .setStatus(ApplicationDoc.idFor(jobId, workerId), status);
+      await api.applications.setStatus(appId, status);
+    } catch (_) {
+      // Revert on failure
+      if (oldStatus != null) {
+        update(() => applicantStatuses[appId] = oldStatus);
+      } else {
+        update(() => applicantStatuses.remove(appId));
+      }
+      showToast(t['actionFailed']);
+    }
+  }
+
+  Future<void> markJobFilled(String jobId) async {
+    final api = backend;
+    if (api == null) return;
+
+    try {
+      await api.jobs.markFilled(jobId);
+      showToast(t['jobMarkedFilled'] ?? 'Job marked as filled');
+      // Refresh jobs list to reflect the filled status immediately
+      await Future.delayed(const Duration(milliseconds: 500));
     } catch (_) {
       showToast(t['actionFailed']);
     }
@@ -2401,6 +2959,7 @@ class AppState extends ChangeNotifier {
     final id = api?.uid;
     if (api == null || id == null) return addListing(name, price, unit);
     if (name.trim().isEmpty || price.isEmpty) return;
+    if (_blockedByTerms()) return;
     try {
       await api.listings.add(ListingDoc(
         id: '',
@@ -2416,7 +2975,9 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Opens (or reuses) the thread between this user and [peerId].
+  /// Opens (or reuses) the thread between this user and [peerId] for [jobId].
+  /// Signed in, the chat screen opens only once the server thread exists — a
+  /// failed create shows an error instead of a chat that never delivers.
   Future<void> openChatLive({
     required String peerId,
     required String peerName,
@@ -2426,10 +2987,20 @@ class AppState extends ChangeNotifier {
   }) async {
     final api = backend;
     final id = api?.uid;
-    openChat(jobId, peerId, back, peerName: peerName);
-    if (api == null || id == null) return;
+    // Never open a chat with yourself (e.g. Message on a job you posted).
+    if (isSelfChat(peerId, id)) return;
+    if (api == null || id == null) {
+      // Offline demo: the local sample chat.
+      openChat(jobId, peerId, back, peerName: peerName);
+      return;
+    }
+    if (!canOpenLiveChat(peerId: peerId, myUid: id, jobId: jobId)) {
+      showToast(t['actionFailed']);
+      return;
+    }
+    _threadId = null;
     try {
-      _threadId = await api.chat.openThread(
+      final threadId = await api.chat.openThread(
         me: id,
         myName: displayName,
         other: peerId,
@@ -2437,18 +3008,34 @@ class AppState extends ChangeNotifier {
         jobId: jobId,
         jobTitle: jobTitle,
       );
-      await api.chat.markRead(_threadId!, id);
-      notifyListeners();
+      _threadId = threadId;
     } catch (_) {
       _threadId = null;
+      showToast(t['actionFailed']);
+      return;
     }
+    openChat(jobId, peerId, back, peerName: peerName);
+    try {
+      await api.chat.markRead(_threadId!, id);
+    } catch (_) {}
+    notifyListeners();
   }
 
   Future<void> sendChatLive(String text) async {
     final api = backend;
     final id = api?.uid;
-    if (api == null || id == null || _threadId == null) return sendChat(text);
-    if (text.trim().isEmpty) return;
+    if (api != null && id != null && _blockedByTerms()) return;
+    switch (chatSendMode(
+        liveBackend: api != null && id != null, hasThread: _threadId != null)) {
+      case ChatSendMode.localDemo:
+        return sendChat(text);
+      case ChatSendMode.blocked:
+        showToast(t['actionFailed']);
+        return;
+      case ChatSendMode.live:
+        break;
+    }
+    if (api == null || id == null || text.trim().isEmpty) return;
     try {
       await api.chat.send(
         threadId: _threadId!,
@@ -2481,8 +3068,7 @@ class AppState extends ChangeNotifier {
   /// English TTS engines read "UniShram" as "uh-ni-shram" rather than
   /// "you-ni-shram" — this respelling nudges them onto the right first
   /// syllable. Only used for speech; the displayed app name is untouched.
-  String get _spokenAppName =>
-      langCode == 'en' ? 'Yoo-nishram' : t['appName'];
+  String get _spokenAppName => langCode == 'en' ? 'Yoo-nishram' : t['appName'];
 
   String get splashLine => '$_spokenAppName. ${t['tagline']}.';
 

@@ -57,11 +57,21 @@ android {
             // its SHA-1/SHA-256 must be registered in Firebase Console under
             // this Android app or phone auth will reject every request with
             // "not authorized to use Firebase Authentication".
-            signingConfig = keystorePropertiesFile.exists()
-                ? signingConfigs.release
-                : signingConfigs.debug
+            if (!keystorePropertiesFile.exists()) {
+                throw new GradleException(
+                    "Release build requires android/key.properties (gitignored). " +
+                    "Signing credentials are missing. Do not proceed. " +
+                    "Create key.properties or use a debug build."
+                )
+            }
+            signingConfig = signingConfigs.release
         }
     }
+}
+
+dependencies {
+    // Firebase App Check with Play Integrity for Android
+    implementation 'com.google.firebase:firebase-appcheck-playintegrity'
 }
 
 flutter {

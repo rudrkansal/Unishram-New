@@ -1,6 +1,8 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_analytics/firebase_analytics.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -41,9 +43,35 @@ Future<void> main() async {
 
   var firebaseReady = false;
   try {
+    // Initialize App Check BEFORE Firebase — required for production safety
+    try {
+      await FirebaseAppCheck.instance.activate(
+        androidProvider: AndroidProvider.playIntegrity,
+      );
+    } catch (e) {
+      debugPrint('App Check initialization failed (non-fatal): $e');
+      // App Check failed but Firebase can still initialize
+    }
+
     await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform);
     firebaseReady = true;
+
+    // Configure Firestore offline persistence for job browsing without network.
+    // This MUST be done immediately after Firebase.initializeApp() and BEFORE
+    // any Firestore reads/listeners are created.
+    if (!kIsWeb) {
+      try {
+        FirebaseFirestore.instance.settings = const Settings(
+          persistenceEnabled: true,
+          cacheSizeBytes: Settings.CACHE_SIZE_UNLIMITED,
+        );
+      } catch (e) {
+        debugPrint('Firestore offline persistence config failed: $e');
+        // Non-fatal: app continues; offline mode may be unavailable
+      }
+    }
+
     // Initialize Firebase Remote Config for translations
     await FirebaseStringsService.initialize();
   } catch (e) {
@@ -78,6 +106,7 @@ Future<void> main() async {
   final backend = firebaseReady ? Backend() : null;
   final state = AppState(backend: backend);
   await state.load();
+  await state.checkTermsOnStart();
   // Public config, needed before sign-in too (onboarding shows minimum wage),
   // so this fires regardless of auth state and never blocks first paint.
   unawaited(state.loadMinWageConfig());

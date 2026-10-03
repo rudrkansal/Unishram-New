@@ -22,13 +22,6 @@ service cloud.firestore {
     function isPlainText(value, maxLen) {
       return value is string && value.size() <= maxLen;
     }
-    // A moment between one job post and the next, stamped by the
-    // onJobPosted function (see the `jobs` create rule and `users.update`).
-    function notRateLimited() {
-      let last = get(/databases/$(database)/documents/users/$(request.auth.uid))
-          .data.get('lastJobPostedAt', null);
-      return last == null || request.time > last + duration.value(15, 's');
-    }
 
     // True if the other participant in this thread has blocked [sender] —
     // enforced here, not just filtered in the UI, so a blocked user genuinely
@@ -56,6 +49,28 @@ service cloud.firestore {
       );
     }
 
+    // Stricter than unchanged(), used by the threads, applications, users and jobs update rules: the field must have the
+    // same value *and presence* before and after. unchanged() passes when the
+    // field is absent from the resulting document, which lets an update
+    // delete it (e.g. removing jobId to dodge the rejected-application check).
+    function fieldKept(field) {
+      return request.resource.data.get(field, null) == resource.data.get(field, null);
+    }
+
+    // [jobId] must be a job with a poster, the caller must hold a live
+    // (pending / shortlisted / hired — not withdrawn or rejected) application
+    // for it, and the participants must be exactly the caller and the poster.
+    function canOpenJobThread(jobId, participants) {
+      let appPath = /databases/$(database)/documents/applications/$(jobId + '_' + request.auth.uid);
+      let jobPath = /databases/$(database)/documents/jobs/$(jobId);
+      return exists(appPath) && exists(jobPath)
+        && get(appPath).data.get('status', null) in ['pending', 'shortlisted', 'hired']
+        && get(jobPath).data.get('postedBy', null) is string
+        && get(jobPath).data.postedBy != request.auth.uid
+        && request.auth.uid in participants
+        && get(jobPath).data.postedBy in participants;
+    }
+
     match /users/{uid} {
       // Profiles are visible to signed-in users: a contractor has to be able to
       // look at a worker before hiring them.
@@ -72,21 +87,50 @@ service cloud.firestore {
         // Trust flags are server-owned from the very first write.
         && request.resource.data.get('suspended', false) == false
         && request.resource.data.get('ratingAverage', 0) == 0
-        && request.resource.data.get('ratingCount', 0) == 0;
+        && request.resource.data.get('ratingCount', 0) == 0
+        // The phone number lives in users/{uid}/private/contact, never on this
+        // publicly readable profile.
+        && request.resource.data.get('phone', '') == '';
 
       allow update: if isSelf(uid)
         && isPlainText(request.resource.data.get('fullName', ''), 300)
-        && unchanged('suspended')
-        && unchanged('ratingAverage')
-        && unchanged('ratingCount')
-        && unchanged('role')
+        && fieldKept('suspended')
+        && fieldKept('ratingAverage')
+        && fieldKept('ratingCount')
+        && fieldKept('role')
+        // No new/changed phone on the public profile (a legacy value may stay
+        // until it is migrated, or be removed, but not be set or edited).
+        && (request.resource.data.get('phone', '') == ''
+            || request.resource.data.get('phone', null) == resource.data.get('phone', null))
         // Only the onJobPosted function may move this — a client resetting
         // its own cooldown would defeat the point of having one.
-        && unchanged('lastJobPostedAt');
+        && fieldKept('lastJobPostedAt');
 
       // Deletion runs through the callable function so the user's jobs,
       // applications and photos go with it.
       allow delete: if false;
+
+      // Private contact details: only the owner can read or write them. Other
+      // users get a contractor's number solely via contractorContacts/{jobId}.
+      match /private/{docId} {
+        allow read: if isSelf(uid);
+        allow create, update: if isSelf(uid)
+          && docId == 'contact'
+          && request.resource.data.keys().hasOnly(['phone', 'updatedAt'])
+          && isPlainText(request.resource.data.get('phone', ''), 20);
+        allow delete: if false;
+      }
+
+      // Terms acceptance (owner-only, readable via the /private rule above): the version accepted and
+      // WHEN — the timestamp must be the server's request time, so a client can never forge or backdate it.
+      match /private/terms {
+        allow create, update: if isSelf(uid)
+          && request.resource.data.keys().hasOnly(['termsVersion', 'termsAcceptedAt'])
+          && request.resource.data.keys().hasAll(['termsVersion', 'termsAcceptedAt'])
+          && request.resource.data.termsVersion is string
+          && request.resource.data.termsVersion.matches('^[0-9]{1,3}(\\.[0-9]{1,3}){0,2}$')
+          && request.resource.data.termsAcceptedAt == request.time;
+      }
 
       match /tokens/{token} {
         allow read, write: if isSelf(uid);
@@ -99,26 +143,42 @@ service cloud.firestore {
       }
     }
 
+    // Contractor contact info: only readable by contractor or approved applicants
+    match /contractorContacts/{jobId} {
+      allow read: if signedIn() && (
+        // Contractor can see their own contact info
+        resource.data.contractorId == request.auth.uid ||
+        // Applicant can see if hired/shortlisted
+        exists(/databases/$(database)/documents/applications/$(jobId + '_' + request.auth.uid)) &&
+        get(/databases/$(database)/documents/applications/$(jobId + '_' + request.auth.uid)).data.status in ['hired', 'shortlisted']
+      );
+      allow write: if false; // Admin only, via Cloud Function
+    }
+
     match /jobs/{jobId} {
+      // Contractor phone removed from public job document; fetch from contractorContacts instead
       allow read: if signedIn();
 
-      allow create: if signedIn()
-        && request.resource.data.postedBy == request.auth.uid
-        // 300 for the same byte-vs-character reason as fullName above.
-        && isPlainText(request.resource.data.title, 300)
-        && isPlainText(request.resource.data.description, 2000)
-        && request.resource.data.wage is int
-        && request.resource.data.wage > 0
-        && request.resource.data.wage <= 100000
-        && request.resource.data.get('applicantCount', 0) == 0
-        && request.resource.data.status == 'open'
-        && notRateLimited();
+      // Jobs are created only by the `postJob` Cloud Function (Admin SDK), which validates the payload and
+      // enforces the post cooldown transactionally. Clients cannot create jobs directly.
+      allow create: if false;
 
-      // The poster may edit their own job but never its applicant tally.
+      // The poster may edit their own job but never its applicant tally or postedBy.
       allow update: if signedIn()
         && resource.data.postedBy == request.auth.uid
-        && unchanged('postedBy')
-        && unchanged('applicantCount');
+        && fieldKept('postedBy')
+        && fieldKept('applicantCount')
+        // The wage and the minimum-wage record are fixed at posting (set by postJob / onJobPosted); a poster
+        // cannot lower the wage afterwards or rewrite the minimum it was checked against.
+        && fieldKept('wage')
+        && fieldKept('minWageAtPost')
+        && fieldKept('belowMinimumWage')
+        && fieldKept('skill')
+        && fieldKept('state')
+        // No new/changed phone on the public job (a legacy value may stay until
+        // it is migrated, or be removed, but not be set or edited).
+        && (request.resource.data.get('contractorPhone', '') == ''
+            || request.resource.data.get('contractorPhone', null) == resource.data.get('contractorPhone', null));
 
       allow delete: if signedIn() && resource.data.postedBy == request.auth.uid;
     }
@@ -133,7 +193,11 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.resource.data.workerId == request.auth.uid
         && applicationId == request.resource.data.jobId + '_' + request.auth.uid
-        && request.resource.data.status == 'pending';
+        && request.resource.data.status == 'pending'
+        // contractorId is the job's real poster, never caller-chosen.
+        && exists(/databases/$(database)/documents/jobs/$(request.resource.data.jobId))
+        && request.resource.data.get('contractorId', null) ==
+           get(/databases/$(database)/documents/jobs/$(request.resource.data.jobId)).data.get('postedBy', null);
 
       // The worker may withdraw; the contractor may shortlist, reject or hire.
       allow update: if signedIn()
@@ -141,7 +205,7 @@ service cloud.firestore {
              && request.resource.data.status == 'withdrawn')
             || (resource.data.contractorId == request.auth.uid
                 && request.resource.data.status in ['pending', 'shortlisted', 'rejected', 'hired']))
-        && unchanged('jobId') && unchanged('workerId') && unchanged('contractorId');
+        && fieldKept('jobId') && fieldKept('workerId') && fieldKept('contractorId');
 
       allow delete: if false;
     }
@@ -149,11 +213,19 @@ service cloud.firestore {
     match /threads/{threadId} {
       allow read: if signedIn() && request.auth.uid in resource.data.participants;
 
+      // A job thread may only be opened by an applicant whose application is
+      // still live, and only with that job's actual poster.
       allow create: if signedIn()
-        && request.auth.uid in request.resource.data.participants
-        && request.resource.data.participants.size() == 2;
+        && request.resource.data.participants is list
+        && request.resource.data.participants.size() == 2
+        && request.resource.data.jobId is string
+        && canOpenJobThread(request.resource.data.jobId, request.resource.data.participants);
 
-      allow update: if signedIn() && request.auth.uid in resource.data.participants;
+      allow update: if signedIn()
+        && request.auth.uid in resource.data.participants
+        && fieldKept('participants')
+        && fieldKept('jobId')
+        && fieldKept('createdAt');
       allow delete: if false;
 
       match /messages/{messageId} {

@@ -19,3 +19,23 @@ key.properties
 # UIDAI certificate is downloaded per-machine
 assets/certs/uidai_prod.pem
 android/key.properties
+
+# Test / emulator artifacts
+tests/security/node_modules/
+node_modules/
+*-debug.log
+firebase-debug.log
+ui-debug.log
+
+# Generated Android/Kotlin build artifacts
+android/.kotlin/
+android/.gradle/
+android/app/.cxx/
+*.salive
+
+# Local credentials — never commit
+.env
+.env.*
+*service-account*.json
+*serviceAccount*.json
+application_default_credentials.json

@@ -5,6 +5,7 @@ import '../../data/catalog.dart';
 import '../../data/strings.dart';
 import '../../state/app_state.dart';
 import '../../theme.dart';
+import '../../backend/experience.dart';
 import '../../backend/models.dart';
 import '../../widgets/common.dart';
 import '../../widgets/account_actions.dart';
@@ -388,21 +389,37 @@ class LabourerJobDetail extends StatelessWidget {
                     // A worker can always message a contractor about a job;
                     // the phone number only appears once the contractor has
                     // shortlisted or hired them for it.
+                    // No Message / Contact on a job you posted yourself.
+                    if (job.contractorUid != app.uid)
                     StreamBuilder<ApplicationDoc?>(
                       stream: app.myApplicationForJob(job.id),
                       builder: (context, snapshot) {
                         final approved = snapshot.data != null &&
                             AppState.isApprovedStatus(snapshot.data!.status);
                         if (approved) {
-                          return _SmallAccentButton(
-                            label: t['contact'],
-                            onTap: () => context.app.openContact(ContactTarget(
-                              name: job.contractor,
-                              subtitle: '${t['contractorLabel']} · ${job.area}',
-                              phone: job.contractorPhone,
-                              chatJobId: job.id,
-                              chatPeerId: job.contractorUid,
-                            )),
+                          return FutureBuilder<Map<String, dynamic>?>(
+                            future: app.getContractorContact(job.id),
+                            builder: (context, phoneSnapshot) {
+                              final phone = phoneSnapshot.data?['contractorPhone'] as String? ?? '';
+                              return _SmallAccentButton(
+                                label: t['contact'],
+                                onTap: phone.isNotEmpty
+                                    ? () => context.app.openContact(ContactTarget(
+                                      name: job.contractor,
+                                      subtitle: '${t['contractorLabel']} · ${job.area}',
+                                      phone: phone,
+                                      chatJobId: job.id,
+                                      chatPeerId: job.contractorUid,
+                                    ))
+                                    : () => context.app.openChatLive(
+                                      peerId: job.contractorUid,
+                                      peerName: job.contractor,
+                                      jobId: job.id,
+                                      jobTitle: job.title,
+                                      back: Screen.labourerJobDetail,
+                                    ),
+                              );
+                            },
                           );
                         }
                         return _SmallAccentButton(
@@ -631,21 +648,30 @@ class _ApplicationCard extends StatelessWidget {
                     // shortlisted or hired for this job; messaging is always
                     // open regardless of status.
                     if (AppState.isApprovedStatus(application.status)) ...[
-                      TextButton(
-                        onPressed: () => context.app.openContact(ContactTarget(
-                          name: job.contractor,
-                          subtitle: '${t['contractorLabel']} · ${job.area}',
-                          phone: job.contractorPhone,
-                          chatJobId: job.id,
-                          chatPeerId: application.contractorId,
-                        )),
-                        child: Text('${t['contact']} ›',
-                            style: const TextStyle(
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w700,
+                      FutureBuilder<Map<String, dynamic>?>(
+                        future: app.getContractorContact(job.id),
+                        builder: (context, phoneSnapshot) {
+                          final phone = phoneSnapshot.data?['contractorPhone'] as String? ?? '';
+                          return TextButton(
+                            onPressed: phone.isNotEmpty
+                                ? () => context.app.openContact(ContactTarget(
+                                  name: job.contractor,
+                                  subtitle: '${t['contractorLabel']} · ${job.area}',
+                                  phone: phone,
+                                  chatJobId: job.id,
+                                  chatPeerId: application.contractorId,
+                                ))
+                                : null,
+                            child: Text('${t['contact']} ›',
+                                style: const TextStyle(
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w700,
                                 color: C.accent)),
+                          );
+                        },
                       ),
                     ],
+                    if (application.contractorId != app.uid)
                     TextButton(
                       onPressed: () => context.app.openChatLive(
                         peerId: application.contractorId,
@@ -783,7 +809,7 @@ class LabourerProfile extends StatelessWidget {
               const SizedBox(height: 8),
               TextButton(
                 onPressed: () => context.app.go(Screen.langSelect),
-                child: Text(t['changeLanguage'] ?? 'Change Language',
+                child: Text(t['changeLanguage'],
                     style: const TextStyle(
                         fontSize: 14.5,
                         fontWeight: FontWeight.w700,
@@ -803,11 +829,16 @@ class LabourerProfile extends StatelessWidget {
   static String _experienceLabel(AppState app) {
     final lp = app.lp;
     final t = app.t;
-    if (lp.experienceYears == null) return '—';
-    if (lp.experienceYears == 0 && lp.experienceMonths != null) {
-      return '${lp.experienceMonths} ${t['monthsShort']}';
-    }
-    return '${lp.experienceIs10Plus ? t['tenPlus'] : lp.experienceYears} ${t['yearsShort']}';
+    final total = effectiveExperienceMonths(
+        years: lp.experienceYears,
+        months: lp.experienceMonths,
+        asOf: lp.experienceAsOf);
+    if (total == null) return '—';
+    return experienceLabel(total,
+        tenPlus: lp.experienceIs10Plus,
+        monthsWord: t['monthsShort'],
+        yearsWord: t['yearsShort'],
+        tenPlusWord: t['tenPlus']);
   }
 }
 

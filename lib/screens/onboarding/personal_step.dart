@@ -5,7 +5,6 @@ import '../../app_scope.dart';
 import '../../data/catalog.dart';
 import '../../data/strings.dart';
 import '../../services/location_service.dart';
-import '../../state/app_state.dart';
 import '../../theme.dart';
 import '../../widgets/common.dart';
 import '../picker_sheet.dart';
@@ -482,12 +481,11 @@ class _AgeSection extends StatelessWidget {
                   ? DateTime.tryParse(lp.dateOfBirth) ??
                       DateTime(now.year - 25, now.month, now.day)
                   : DateTime(now.year - (lp.age ?? 25), now.month, now.day);
-              // Same floor as the age stepper: a labourer/contractor can't
-              // pick a date implying under kMinAgeYears in the first place,
-              // rather than only being told so after they try to continue.
-              final latestAllowed = app.role == Role.client
-                  ? now
-                  : DateTime(now.year - kMinAgeYears, now.month, now.day);
+              // Same floor as the age stepper: nobody (of any role) can pick a date implying
+              // under kMinAgeYears in the first place, rather than only being told so after
+              // they try to continue.
+              final latestAllowed =
+                  DateTime(now.year - kMinAgeYears, now.month, now.day);
               final picked = await showDatePicker(
                 context: context,
                 initialDate: initial.isAfter(latestAllowed)

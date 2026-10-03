@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:geoflutterfire_plus/geoflutterfire_plus.dart';
 
 import 'models.dart';
+import 'post_job_api.dart';
 
 typedef Snap = DocumentSnapshot<Map<String, dynamic>>;
 
@@ -36,48 +37,57 @@ class AuthRepository {
     bool resend = false,
   }) async {
     try {
-      await _verifyPhoneNumber(
-        phone: phone,
-        onCodeSent: onCodeSent,
-        onVerified: onVerified,
-        onError: onError,
-        resend: resend,
+      if (kDebugMode) {
+        debugPrint('[AuthRepository.sendOtp] Starting OTP verification for: +91$phone');
+      }
+      await _auth.verifyPhoneNumber(
+        phoneNumber: '+91$phone',
+        forceResendingToken: resend ? _resendToken : null,
+        timeout: const Duration(seconds: 60),
+        verificationCompleted: (credential) async {
+          if (kDebugMode) {
+            debugPrint('[AuthRepository] verificationCompleted callback fired');
+          }
+          try {
+            onVerified(await _auth.signInWithCredential(credential));
+          } catch (e) {
+            if (kDebugMode) {
+              debugPrint('[AuthRepository] Error in verificationCompleted: $e');
+            }
+            onError(_message(e));
+          }
+        },
+        verificationFailed: (e) {
+          if (kDebugMode) {
+            debugPrint('[AuthRepository] verificationFailed callback fired with: $e');
+          }
+          onError(_message(e));
+        },
+        codeSent: (verificationId, resendToken) {
+          if (kDebugMode) {
+            debugPrint('[AuthRepository] codeSent callback fired');
+          }
+          _verificationId = verificationId;
+          _resendToken = resendToken;
+          onCodeSent();
+        },
+        codeAutoRetrievalTimeout: (verificationId) {
+          if (kDebugMode) {
+            debugPrint('[AuthRepository] codeAutoRetrievalTimeout callback fired');
+          }
+          _verificationId = verificationId;
+        },
       );
     } catch (e) {
-      // verifyPhoneNumber can throw instead of calling verificationFailed
-      // (e.g. a malformed number or a platform-channel error); without this
-      // the Send OTP spinner never stops.
+      // verifyPhoneNumber's own Future can reject directly (seen on web)
+      // without ever calling verificationFailed — route it through the same
+      // onError channel so callers only ever need to handle one failure path,
+      // including a throttled ("too-many-requests") send/resend.
+      if (kDebugMode) {
+        debugPrint('[AuthRepository.sendOtp] Caught exception in verifyPhoneNumber: $e');
+      }
       onError(_message(e));
     }
-  }
-
-  Future<void> _verifyPhoneNumber({
-    required String phone,
-    required void Function() onCodeSent,
-    required void Function(UserCredential credential) onVerified,
-    required void Function(String message) onError,
-    required bool resend,
-  }) async {
-    await _auth.verifyPhoneNumber(
-      phoneNumber: '+91$phone',
-      forceResendingToken: resend ? _resendToken : null,
-      timeout: const Duration(seconds: 60),
-      verificationCompleted: (credential) async {
-        try {
-          onVerified(await _auth.signInWithCredential(credential));
-        } catch (e) {
-          onError(_message(e));
-        }
-      },
-      verificationFailed: (e) => onError(_message(e)),
-      codeSent: (verificationId, resendToken) {
-        _verificationId = verificationId;
-        _resendToken = resendToken;
-        onCodeSent();
-      },
-      codeAutoRetrievalTimeout: (verificationId) =>
-          _verificationId = verificationId,
-    );
   }
 
   /// Throws the translation-key string (see [_message]) rather than a raw
@@ -112,9 +122,27 @@ class AuthRepository {
   /// caller has a `t`. `authErrorGeneric` is the fallback for a Firebase
   /// code with no specific copy of its own (rare, but the raw
   /// [FirebaseAuthException.message] is always English and never shown).
+  /// Firebase's own error code for the most recent failure the app has no specific wording for, so the
+  /// generic "Sign-in failed" message can say what actually went wrong.
+  static String? lastUnrecognisedCode;
+
+  static String _generic(String code) {
+    lastUnrecognisedCode = code;
+    return 'authErrorGeneric';
+  }
+
   static String _message(Object error) {
-    _logAuthError(error);
+    lastUnrecognisedCode = null;
     if (error is FirebaseAuthException) {
+      if (kDebugMode) {
+        debugPrint(
+          '[FirebaseAuth] Exception caught\n'
+          '  Code: ${error.code}\n'
+          '  Message: ${error.message}\n'
+          '  Plugin Code: ${error.plugin}\n'
+          '  Full exception: $error',
+        );
+      }
       return switch (error.code) {
         'invalid-phone-number' => 'authErrorInvalidPhone',
         'too-many-requests' => 'authErrorTooManyAttempts',
@@ -123,9 +151,13 @@ class AuthRepository {
         'quota-exceeded' => 'authErrorQuotaExceeded',
         'requires-recent-login' => 'authErrorReauthRequired',
         'network-request-failed' => 'authErrorNetwork',
-        _ => 'authErrorGeneric',
+        _ => _generic(error.code),
       };
     }
+    if (kDebugMode) {
+      debugPrint('[FirebaseAuth] Non-Firebase exception: $error\nType: ${error.runtimeType}');
+    }
+    lastUnrecognisedCode = 'unknown';
     return 'authErrorGeneric';
   }
 
@@ -161,10 +193,53 @@ class UserRepository {
 
   /// Creates on first write, merges afterwards, so an interrupted onboarding
   /// resumes instead of starting over.
-  Future<void> save(UserDoc user) => _users.doc(user.uid).set({
-        ...user.toMap(),
-        'createdAt': FieldValue.serverTimestamp(),
+  Future<void> save(UserDoc user) async {
+    final batch = _users.firestore.batch();
+    batch.set(_users.doc(user.uid), {
+      ...user.toMap(),
+      'createdAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    if (user.phone.isNotEmpty) {
+      batch.set(_privateContact(user.uid), {
+        'phone': user.phone,
+        'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+    }
+    await batch.commit();
+  }
+
+  DocumentReference<Map<String, dynamic>> _privateTerms(String uid) =>
+      _users.doc(uid).collection('private').doc('terms');
+
+  /// The Terms version this user has accepted (owner-only document), or null if none.
+  Future<String?> fetchTermsVersion(String uid) async {
+    final snap = await _privateTerms(uid).get();
+    final v = snap.data()?['termsVersion'];
+    return v is String ? v : null;
+  }
+
+  /// Records acceptance. The timestamp is generated by the server (the rules require it to equal the
+  /// request time), never taken from the client.
+  Future<void> acceptTerms(String uid, String version) =>
+      _privateTerms(uid).set({
+        'termsVersion': version,
+        'termsAcceptedAt': FieldValue.serverTimestamp(),
+      });
+
+  DocumentReference<Map<String, dynamic>> _privateContact(String uid) =>
+      _users.doc(uid).collection('private').doc('contact');
+
+  /// The signed-in user's own phone number (owner-only document). Falls back
+  /// to a legacy profile field until that has been migrated. Only ever call
+  /// this for the current user — rules deny it for anyone else.
+  Future<String> fetchOwnPhone(String uid, {String legacy = ''}) async {
+    try {
+      final snap = await _privateContact(uid).get();
+      final phone = snap.data()?['phone'];
+      if (phone is String && phone.isNotEmpty) return phone;
+    } on FirebaseException catch (_) {}
+    return legacy;
+  }
 
   Future<void> patch(String uid, Map<String, dynamic> fields) =>
       _users.doc(uid).set({
@@ -285,17 +360,21 @@ class UserRepository {
 }
 
 class JobRepository {
-  JobRepository({FirebaseFirestore? db})
-      : _jobs = (db ?? FirebaseFirestore.instance).collection('jobs');
+  JobRepository({FirebaseFirestore? db, PostJobApi? postJobApi})
+      : _jobs = (db ?? FirebaseFirestore.instance).collection('jobs'),
+        _postJobApi = postJobApi ?? PostJobApi();
   final CollectionReference<Map<String, dynamic>> _jobs;
+  final PostJobApi _postJobApi;
 
-  Future<String> post(JobDoc job) async {
-    final ref = await _jobs.add(job.toMap());
-    return ref.id;
-  }
+  /// Jobs are created only through the `postJob` Cloud Function (firestore.rules deny
+  /// client creates); it validates the payload and enforces the post cooldown.
+  Future<String> post(JobDoc job) => _postJobApi.post(job);
 
   Future<void> close(String jobId) =>
       _jobs.doc(jobId).update({'status': 'closed'});
+
+  Future<void> markFilled(String jobId) =>
+      _jobs.doc(jobId).update({'status': 'filled'});
 
   Stream<JobDoc?> watch(String jobId) => _jobs
       .doc(jobId)
@@ -455,7 +534,7 @@ class ChatRepository {
   Stream<List<MessageDoc>> watchMessages(String threadId) => _threads
       .doc(threadId)
       .collection('messages')
-      .orderBy('sentAt')
+      .orderBy('sentAt', descending: true)
       .limit(200)
       .snapshots()
       .map((s) => s.docs.map(MessageDoc.fromDoc).toList());

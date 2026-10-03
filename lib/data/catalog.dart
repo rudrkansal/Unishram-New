@@ -1223,6 +1223,8 @@ class Job {
   /// same-viewer estimate rather than claiming a wage violation that was
   /// never actually computed.
   final int minWageAtPost;
+  /// Job status: 'open', 'filled', or 'closed'
+  final String status;
   const Job({
     required this.id,
     required this.title,
@@ -1242,6 +1244,7 @@ class Job {
     this.durationSpan = '',
     this.endDate,
     this.minWageAtPost = 0,
+    this.status = 'open',
   });
 }
 
