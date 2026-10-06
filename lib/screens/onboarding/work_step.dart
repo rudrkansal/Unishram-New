@@ -546,24 +546,7 @@ class PhoneVerificationBlock extends StatelessWidget {
         ),
         if (app.otpSent && !lp.phoneVerified) ...[
           const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: AppTextField(
-                  initial: app.otpCode,
-                  hint: t['enterOtp'],
-                  digitsOnly: true,
-                  maxLength: 6,
-                  letterSpacing: 5,
-                  fontSize: 17,
-                  keyboardType: TextInputType.number,
-                  onChanged: (v) => context.app.update(() => app.otpCode = v),
-                ),
-              ),
-              const SizedBox(width: 8),
-              _VerifyOtpButton(app: app, t: t),
-            ],
-          ),
+          _OtpEntryRow(app: app, t: t),
           const SizedBox(height: 7),
           Text(
             t['otpSentHint'],
@@ -735,9 +718,16 @@ class _ResendOtpButtonState extends State<_ResendOtpButton> {
 /// countdown here, a throttled Verify would stay showing a stale, already
 /// wrong wait time until some unrelated rebuild happened to refresh it.
 class _VerifyOtpButton extends StatefulWidget {
-  const _VerifyOtpButton({required this.app, required this.t});
+  const _VerifyOtpButton({
+    required this.app,
+    required this.t,
+    required this.codeLength,
+    required this.onSubmit,
+  });
   final AppState app;
   final Str t;
+  final int codeLength;
+  final VoidCallback onSubmit;
 
   @override
   State<_VerifyOtpButton> createState() => _VerifyOtpButtonState();
@@ -794,8 +784,85 @@ class _VerifyOtpButtonState extends State<_VerifyOtpButton> {
             : t['verify'];
     return _SideButton(
       label: label,
-      enabled: app.otpCode.length == 6 && !app.otpSending && !throttled,
-      onTap: () => context.app.verifyOtp(),
+      enabled: widget.codeLength == 6 && !app.otpSending && !throttled,
+      onTap: widget.onSubmit,
+    );
+  }
+}
+
+/// The OTP field and its Verify button. Verify reads the field's live text,
+/// which includes digits some Android keyboards keep as an uncommitted
+/// composition until ✓ is pressed, so tapping Verify with the keyboard still
+/// open submits the code straight away. The keyboard's ✓ submits too.
+class _OtpEntryRow extends StatefulWidget {
+  const _OtpEntryRow({required this.app, required this.t});
+  final AppState app;
+  final Str t;
+
+  @override
+  State<_OtpEntryRow> createState() => _OtpEntryRowState();
+}
+
+class _OtpEntryRowState extends State<_OtpEntryRow> {
+  late final TextEditingController _c =
+      TextEditingController(text: widget.app.otpCode);
+
+  String get _code {
+    final digits = _c.text.replaceAll(RegExp(r'\D'), '');
+    return digits.length > 6 ? digits.substring(0, 6) : digits;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _c.addListener(_onText);
+  }
+
+  void _onText() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    _c.removeListener(_onText);
+    _c.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final app = context.app;
+    final code = _code;
+    if (code.length != 6 || app.otpSending) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    app.update(() => app.otpCode = code);
+    app.verifyOtp();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = widget.app;
+    return Row(
+      children: [
+        Expanded(
+          child: AppTextField(
+            controller: _c,
+            initial: app.otpCode,
+            hint: widget.t['enterOtp'],
+            digitsOnly: true,
+            maxLength: 6,
+            letterSpacing: 5,
+            fontSize: 17,
+            keyboardType: TextInputType.number,
+            textInputAction: TextInputAction.done,
+            autofillHints: const [AutofillHints.oneTimeCode],
+            onSubmitted: (_) => _submit(),
+            onChanged: (v) => context.app.update(() => app.otpCode = v),
+          ),
+        ),
+        const SizedBox(width: 8),
+        _VerifyOtpButton(
+            app: app, t: widget.t, codeLength: _code.length, onSubmit: _submit),
+      ],
     );
   }
 }

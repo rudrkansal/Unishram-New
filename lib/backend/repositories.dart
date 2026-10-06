@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'package:geoflutterfire_plus/geoflutterfire_plus.dart';
@@ -159,6 +160,20 @@ class AuthRepository {
     lastUnrecognisedCode = 'unknown';
     return 'authErrorGeneric';
   }
+
+  /// The user only ever sees the translated copy, which hides what actually
+  /// went wrong (a missing SHA fingerprint, Play Integrity, billing...). Log
+  /// the real code to the console and to Crashlytics so Play builds can be
+  /// diagnosed without a cable.
+  static void _logAuthError(Object error) {
+    final detail = error is FirebaseAuthException
+        ? 'FirebaseAuthException(${error.code}): ${error.message}'
+        : '$error';
+    debugPrint('Phone auth failed: $detail');
+    unawaited(FirebaseCrashlytics.instance
+        .recordError(error, StackTrace.current, reason: 'phone auth: $detail')
+        .catchError((_) {}));
+  }
 }
 
 class UserRepository {
@@ -224,6 +239,21 @@ class UserRepository {
       if (phone is String && phone.isNotEmpty) return phone;
     } on FirebaseException catch (_) {}
     return legacy;
+  }
+
+  /// Another user's phone for Call now. firestore.rules decide who may read
+  /// it (role pair + not blocked); refused or missing returns ''. Profiles not
+  /// yet migrated still carry it on the profile itself.
+  Future<String> fetchContactPhone(String uid) async {
+    try {
+      final phone = (await _privateContact(uid).get()).data()?['phone'];
+      if (phone is String && phone.isNotEmpty) return phone;
+    } on FirebaseException catch (_) {}
+    try {
+      final legacy = (await _users.doc(uid).get()).data()?['phone'];
+      if (legacy is String) return legacy;
+    } on FirebaseException catch (_) {}
+    return '';
   }
 
   Future<void> patch(String uid, Map<String, dynamic> fields) =>
@@ -505,6 +535,26 @@ class ChatRepository {
       'names': {me: myName, other: otherName},
       'jobId': jobId,
       'jobTitle': jobTitle,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    return id;
+  }
+
+  /// Opens, or reuses, the single direct thread between a contractor and a
+  /// labourer. The id and participant order are canonical, so reopening hits
+  /// the same document and the update rule (participants/kind kept) passes.
+  Future<String> openDirectThread({
+    required String me,
+    required String myName,
+    required String other,
+    required String otherName,
+  }) async {
+    final id = ThreadDoc.directIdFor(me, other);
+    await _threads.doc(id).set({
+      'participants': ThreadDoc.sortedPair(me, other),
+      'names': {me: myName, other: otherName},
+      'jobId': null,
+      'kind': ThreadDoc.kindDirect,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
     return id;

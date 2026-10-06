@@ -8,7 +8,9 @@ import '../../theme.dart';
 import '../../backend/models.dart';
 import '../../widgets/account_actions.dart';
 import '../../widgets/common.dart';
+import '../../widgets/direct_threads_section.dart';
 import '../../widgets/feed_builder.dart';
+import '../../widgets/profile_contact_actions.dart';
 import '../../widgets/rate_dialog.dart';
 import '../../widgets/report_block_sheet.dart';
 import '../../widgets/search_tier_bar.dart';
@@ -21,6 +23,15 @@ class ContractorHome extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.appWatch;
 
+    return Column(
+      children: [
+        const DirectThreadsSection(back: Screen.contractorHome),
+        Expanded(child: _postedJobs(context, app)),
+      ],
+    );
+  }
+
+  Widget _postedJobs(BuildContext context, AppState app) {
     return FeedBuilder<Job>(
       stream: app.myPostedJobsFeed(),
       emptyText: app.t['noJobsPosted'],
@@ -116,6 +127,7 @@ class ContractorApplicants extends StatelessWidget {
         separatorBuilder: (_, __) => const SizedBox(height: 20),
         itemBuilder: (context, jobIndex) {
           final job = jobs[jobIndex];
+          final filled = job.status == 'filled';
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -128,14 +140,22 @@ class ContractorApplicants extends StatelessWidget {
                             fontWeight: FontWeight.w700,
                             color: C.text)),
                   ),
-                  _ActionButton(
-                    label: t['markFilled'] ?? 'Mark Filled',
-                    background: job.status == 'filled' ? C.dangerBg : C.accentTint,
-                    color: job.status == 'filled' ? C.danger : C.accent,
-                    onTap: job.status == 'filled' ? null : () => context.app.markJobFilled(job.id),
+                  const SizedBox(width: 10),
+                  _FilledButton(
+                    filled: filled,
+                    label: filled ? t['filledLabel'] : t['markFilled'],
+                    onTap: filled
+                        ? null
+                        : () => context.app.markJobFilled(job.id),
                   ),
                 ],
               ),
+              if (filled) ...[
+                const SizedBox(height: 6),
+                Text(t['filledDisclaimer'],
+                    style: const TextStyle(
+                        fontSize: 11.5, height: 1.35, color: C.textSecondary)),
+              ],
               const SizedBox(height: 12),
               StreamBuilder<List<ApplicationDoc>>(
                 stream: app.applicationsForJob(job.id),
@@ -335,6 +355,39 @@ class _ActionButton extends StatelessWidget {
               textAlign: TextAlign.center,
               style: TextStyle(
                   fontSize: 12.5, fontWeight: FontWeight.w700, color: color)),
+        ),
+      );
+}
+
+/// Green "Mark Filled" until the job is filled, then a red, inert "Filled".
+class _FilledButton extends StatelessWidget {
+  const _FilledButton(
+      {required this.filled, required this.label, required this.onTap});
+  final bool filled;
+  final String label;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        enabled: onTap != null,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 40, minWidth: 96),
+            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            decoration: BoxDecoration(
+                color: filled ? C.danger : C.ok,
+                borderRadius: BorderRadius.circular(8)),
+            child: Text(label,
+                maxLines: 1,
+                style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white)),
+          ),
         ),
       );
 }
@@ -849,29 +902,26 @@ class WorkerDetail extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 24),
-        // No direct chat from the Find screens (chat is job-scoped), and other
-        // users' phones are not on public profiles — so Contact only appears
-        // where a phone is actually available (offline sample data).
-        if (w.phone.isNotEmpty)
-          PrimaryButton(t['contact'],
-              onTap: () => context.app.openContact(ContactTarget(
-                    name: w.name,
-                    subtitle: '${w.skill} · ${w.location}',
-                    phone: w.phone,
-                  ))),
         if (w.id != app.uid) ...[
+          ProfileContactActions(
+            app: app,
+            peerId: w.id,
+            peerName: w.name,
+            back: Screen.contractorWorkerDetail,
+            fallbackPhone: w.phone,
+          ),
           const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              RateButton(
-                app: app,
-                t: t,
-                aboutUserId: w.id,
-                jobId: app.selectedJobId ?? '',
-                aboutName: w.name,
-              ),
-            ],
+          // A review is tied to a job, so rate against this worker's
+          // application to one of my jobs when there is one.
+          FutureBuilder<ApplicationDoc?>(
+            future: app.applicationFromWorker(w.id),
+            builder: (context, snapshot) => RateButton(
+              app: app,
+              t: t,
+              aboutUserId: w.id,
+              jobId: snapshot.data?.jobId ?? app.selectedJobId ?? '',
+              aboutName: w.name,
+            ),
           ),
         ],
       ],
@@ -1075,8 +1125,7 @@ class _CalcRowCard extends StatelessWidget {
                   }),
                 ),
               ),
-              if (app.calcRows.length > 1)
-                IconButton(
+              IconButton(
                   onPressed: () =>
                       context.app.update(() => app.calcRows.removeAt(index)),
                   icon: const Icon(Icons.close, size: 18, color: C.muted),

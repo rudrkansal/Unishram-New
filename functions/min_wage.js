@@ -75,6 +75,7 @@ const SKILL_CATEGORY = {
   "Drainage / Sewerage Worker": "semi_skilled",
   "Drainage": "semi_skilled",
   "Earthwork Worker": "unskilled",
+  "Gardener": "unskilled",
   "Site Supervisor / Foreman": "skilled",
   "Site Supervisor": "skilled",
   "Surveyor": "skilled",

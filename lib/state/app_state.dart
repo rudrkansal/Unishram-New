@@ -584,6 +584,7 @@ class AppState extends ChangeNotifier {
   String? chatPeerId;
   String? chatPeerName;
   Screen chatBackScreen = Screen.contractorHome;
+
   String? selectedJobId;
   Job? _selectedFeedJob;
   String? selectedWorkerId;
@@ -608,15 +609,31 @@ class AppState extends ChangeNotifier {
   String postEndDate = '';
   String postHoursPerDay = '';
 
-  List<CalcRow> calcRows = [
-    CalcRow('mason', 5, 750, 30),
-    CalcRow('excavator', 1, 650, 10),
-    CalcRow('helper', 5, 450, 30),
-  ];
-  int calcMaterial = 50000;
-  int calcEquipment = 10000;
-  int calcTransport = 5000;
-  int calcContingencyPct = 10;
+  List<CalcRow> calcRows = [];
+  int calcMaterial = 0;
+  int calcEquipment = 0;
+  int calcTransport = 0;
+  int calcContingencyPct = kDefaultContingencyPct;
+
+  /// Recommended buffer, not project data — it is 10% of whatever the user
+  /// enters, so a fresh calculator still totals ₹0.
+  static const kDefaultContingencyPct = 10;
+
+  /// True when the saved calculator still holds exactly the demo project
+  /// earlier builds pre-filled (and persisted on first save), untouched.
+  static bool isLegacySampleCalc(List<CalcRow> rows, int material,
+      int equipment, int transport) {
+    String sig(List<CalcRow> r) =>
+        r.map((e) => '${e.skillId}:${e.count}:${e.wage}:${e.days}').join(',');
+    const sampleRows = {
+      'mason:5:750:30,excavator:1:650:10,helper:5:450:30',
+      'mason:5:750:30',
+    };
+    return sampleRows.contains(sig(rows)) &&
+        material == 50000 &&
+        equipment == 10000 &&
+        transport == 5000;
+  }
 
   List<String> extraSkills = ['Mason', 'Helper'];
   String wageExpectation = '750';
@@ -684,11 +701,18 @@ class AppState extends ChangeNotifier {
       calcRows = (d['calcRows'] as List? ?? [])
           .map((e) => CalcRow.fromJson(Map<String, dynamic>.from(e)))
           .toList();
-      if (calcRows.isEmpty) calcRows = [CalcRow('mason', 5, 750, 30)];
       calcMaterial = d['calcMaterial'] ?? calcMaterial;
       calcEquipment = d['calcEquipment'] ?? calcEquipment;
       calcTransport = d['calcTransport'] ?? calcTransport;
       calcContingencyPct = d['calcContingencyPct'] ?? calcContingencyPct;
+      if (isLegacySampleCalc(
+          calcRows, calcMaterial, calcEquipment, calcTransport)) {
+        calcRows = [];
+        calcMaterial = 0;
+        calcEquipment = 0;
+        calcTransport = 0;
+        calcContingencyPct = kDefaultContingencyPct;
+      }
       blockedUserIds = List<String>.from(d['blockedUserIds'] ?? const []);
       blockedUserNames =
           Map<String, String>.from(d['blockedUserNames'] ?? const {});
@@ -802,15 +826,11 @@ class AppState extends ChangeNotifier {
     chatMessages = {};
     extraSkills = ['Mason', 'Helper'];
     wageExpectation = '750';
-    calcRows = [
-      CalcRow('mason', 5, 750, 30),
-      CalcRow('excavator', 1, 650, 10),
-      CalcRow('helper', 5, 450, 30),
-    ];
-    calcMaterial = 50000;
-    calcEquipment = 10000;
-    calcTransport = 5000;
-    calcContingencyPct = 10;
+    calcRows = [];
+    calcMaterial = 0;
+    calcEquipment = 0;
+    calcTransport = 0;
+    calcContingencyPct = kDefaultContingencyPct;
     ownListings = const [
       Listing('ol1', 'Cement (OPC 53)', 370, 'bag'),
       Listing('ol2', 'Sand (River)', 1400, 'ton'),
@@ -840,6 +860,13 @@ class AppState extends ChangeNotifier {
   }
 
   void selectRole(Role r) {
+    // A signed-in account keeps the role it registered with (firestore.rules
+    // never let it change), so picking another one here must not just swap
+    // the screens while every permission still follows the stored role.
+    if (signedIn) {
+      unawaited(_selectRoleSignedIn(r));
+      return;
+    }
     role = r;
     if (r == Role.vendor) {
       screen = Screen.vendorComingSoon;
@@ -850,6 +877,47 @@ class AppState extends ChangeNotifier {
       screen = Screen.profilePersonal;
     }
     _changed();
+  }
+
+  Future<void> _selectRoleSignedIn(Role r) async {
+    Role? accountRole = role;
+    final api = backend;
+    final id = api?.uid;
+    if (api != null && id != null) {
+      try {
+        accountRole = roleFromKey((await api.users.fetch(id))?.role) ?? role;
+      } catch (_) {}
+    }
+    if (accountRole != null && accountRole != r) {
+      showToast(t['accountRoleLocked']
+          .replaceAll('{role}', roleLabel(accountRole)));
+      return;
+    }
+    update(() {
+      role = r;
+      screen = r == Role.vendor ? Screen.vendorComingSoon : defaultScreenFor(r);
+    });
+  }
+
+  /// A phone left showing a different role than its account (from before
+  /// role switching was locked) is put back on the account's real role.
+  Future<void> reconcileRoleWithAccount() async {
+    final api = backend;
+    final id = api?.uid;
+    if (api == null || id == null || role == null) return;
+    Role? stored;
+    try {
+      stored = roleFromKey((await api.users.fetch(id)
+              .timeout(const Duration(seconds: 6)))
+          ?.role);
+    } catch (_) {
+      return;
+    }
+    if (stored == null || stored == role) return;
+    update(() {
+      role = stored;
+      screen = defaultScreenFor(stored!);
+    });
   }
 
   void switchRole() {
@@ -881,7 +949,11 @@ class AppState extends ChangeNotifier {
     if (screen == Screen.blockedUsers) {
       return go(accountBackScreen);
     }
-    go(_backMap[screen] ?? Screen.roleSelect);
+    final mapped = _backMap[screen];
+    if (mapped != null) return go(mapped);
+    // Back on a home screen never drops a signed-in user into role selection.
+    if (signedIn && role != null) return go(defaultScreenFor(role!));
+    go(Screen.roleSelect);
   }
 
   /// Where Blocked users returns to — whichever profile screen (labourer,
@@ -1486,7 +1558,9 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> verifyOtp() async {
-    if (otpCode.length < 6 || lp.phoneVerified) return;
+    // One verification in flight at a time: Verify, ✓ and a quick double tap
+    // can all land together.
+    if (otpCode.length < 6 || otpSending || lp.phoneVerified) return;
     // Belt-and-braces alongside the UI disabling Verify during a local
     // throttle cooldown — never let a verify attempt through early even if
     // something else triggers this call.
@@ -1565,6 +1639,23 @@ class AppState extends ChangeNotifier {
   Future<void> _afterSignIn() async {
     final api = backend;
     if (api == null) return;
+    // A number already registered under another role must not be silently
+    // turned into that role (and have this onboarding overwritten by the old
+    // profile): the role on a profile can never change (firestore.rules).
+    final existingRole = await _existingRoleConflict(api);
+    if (existingRole != null) {
+      await api.auth.signOut();
+      update(() {
+        lp.phoneVerified = false;
+        otpSent = false;
+        otpCode = '';
+        otpSentAt = null;
+        authError = t['roleMismatchError']
+            .replaceAll('{existing}', roleLabel(existingRole))
+            .replaceAll('{chosen}', roleLabel(role!));
+      });
+      return;
+    }
     await api.registerForPush();
     await syncFromServer();
 
@@ -1595,6 +1686,30 @@ class AppState extends ChangeNotifier {
     await pushProfile();
     _startSuspensionCheck(); // Monitor for suspension changes
   }
+
+  /// The role an existing profile for this login holds, when it differs from
+  /// the role chosen on this device. Null when there is no profile yet, it
+  /// matches, or nothing was chosen.
+  Future<Role?> _existingRoleConflict(Backend api) async {
+    final id = api.uid;
+    final chosen = role;
+    if (id == null || chosen == null) return null;
+    final doc = await api.users.fetch(id);
+    return existingRoleConflict(chosen: chosen, storedRole: doc?.role);
+  }
+
+  static Role? existingRoleConflict(
+      {required Role chosen, required String? storedRole}) {
+    final stored = roleFromKey(storedRole);
+    return stored != null && stored != chosen ? stored : null;
+  }
+
+  String roleLabel(Role r) => switch (r) {
+        Role.labourer => t['roleLabourer'],
+        Role.contractor => t['roleContractor'],
+        Role.client => t['roleClient'],
+        Role.vendor => t['roleVendor'],
+      };
 
   /// Overwrites local state with the server's copy when one exists.
   Future<void> syncFromServer() async {
@@ -2331,8 +2446,10 @@ class AppState extends ChangeNotifier {
       state: p.state,
     )
         .map((docs) {
+      // The query already asks for open jobs; re-checking here keeps a stale
+      // offline-cache copy of a since-filled/closed job out of the feed too.
       final jobs = docs
-          .where((d) => d.status != 'filled')
+          .where((d) => isListedJobStatus(d.status))
           .map((d) => d.toJob(viewerLocation: _myLocation))
           .where((j) => !isBlocked(j.contractorUid))
           .toList();
@@ -2419,6 +2536,10 @@ class AppState extends ChangeNotifier {
   /// this job, as opposed to merely having received the application.
   static bool isApprovedStatus(String status) =>
       status == 'shortlisted' || status == 'hired';
+
+  /// Only open jobs appear in workers' feeds; filled and closed ones are kept
+  /// (for history) but never listed.
+  static bool isListedJobStatus(String status) => status == 'open';
 
   /// True when opening a chat would put the user in a thread with themselves
   /// (Message on a job they posted, or a peer id equal to their own uid).
@@ -2753,6 +2874,32 @@ class AppState extends ChangeNotifier {
     return count;
   }
 
+  /// This worker's application to one of my posted jobs, if any — the only
+  /// link through which chat (job-scoped threads) and their phone are
+  /// available to me. Hired beats shortlisted beats pending; rejected
+  /// applications are ignored because the rules refuse chat on them.
+  Future<ApplicationDoc?> applicationFromWorker(String workerId) async {
+    const rank = {'hired': 0, 'shortlisted': 1};
+    ApplicationDoc? best;
+    for (final job in myPostedJobs) {
+      try {
+        final apps = await applicationsForJob(job.id)
+            .first
+            .timeout(const Duration(seconds: 3));
+        for (final a in apps) {
+          if (a.workerId != workerId || a.status == 'rejected') continue;
+          if (best == null ||
+              (rank[a.status] ?? 2) < (rank[best.status] ?? 2)) {
+            best = a;
+          }
+        }
+      } catch (_) {
+        // Skip a job whose applications can't be read right now.
+      }
+    }
+    return best;
+  }
+
   Stream<List<Review>> reviewFeed() {
     final api = backend;
     final id = api?.uid;
@@ -2964,9 +3111,7 @@ class AppState extends ChangeNotifier {
 
     try {
       await api.jobs.markFilled(jobId);
-      showToast(t['jobMarkedFilled'] ?? 'Job marked as filled');
-      // Refresh jobs list to reflect the filled status immediately
-      await Future.delayed(const Duration(milliseconds: 500));
+      showToast(t['jobMarkedFilled']);
     } catch (_) {
       showToast(t['actionFailed']);
     }
@@ -3037,6 +3182,122 @@ class AppState extends ChangeNotifier {
       await api.chat.markRead(_threadId!, id);
     } catch (_) {}
     notifyListeners();
+  }
+
+  /// Who may start a direct (job-less) chat: a contractor or a client, with
+  /// someone else who is not blocked. firestore.rules also check the peer's
+  /// role (contractor -> labourer, client -> labourer/contractor) and blocks.
+  static bool canStartDirectChat({
+    required Role? myRole,
+    required String? myUid,
+    required String peerId,
+    required bool peerBlocked,
+  }) =>
+      (myRole == Role.contractor || myRole == Role.client) &&
+      myUid != null &&
+      peerId.isNotEmpty &&
+      peerId != 'me' &&
+      peerId != myUid &&
+      !peerBlocked;
+
+  /// Message now from a profile opened via Find. No application is needed;
+  /// the conversation lives in one stable `direct_<uidA>_<uidB>` thread, and
+  /// no phone number is involved.
+  Future<void> openDirectChat({
+    required String peerId,
+    required String peerName,
+    required Screen back,
+  }) async {
+    final api = backend;
+    final id = api?.uid;
+    if (api == null || id == null) {
+      openChat(null, peerId, back, peerName: peerName);
+      return;
+    }
+    if (!canStartDirectChat(
+        myRole: role,
+        myUid: id,
+        peerId: peerId,
+        peerBlocked: isBlocked(peerId))) {
+      showToast(t['actionFailed']);
+      return;
+    }
+    _threadId = null;
+    try {
+      _threadId = await api.chat.openDirectThread(
+        me: id,
+        myName: displayName,
+        other: peerId,
+        otherName: peerName,
+      );
+    } catch (e) {
+      _threadId = null;
+      showToast(await _directChatFailureText(api, id, e));
+      return;
+    }
+    openChat(null, peerId, back, peerName: peerName);
+    try {
+      await api.chat.markRead(_threadId!, id);
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  /// The rules only let a profile stored as a contractor open a direct
+  /// thread. When the stored role differs from the one on this device, say so
+  /// instead of a generic failure.
+  Future<String> _directChatFailureText(
+      Backend api, String id, Object error) async {
+    if (error is FirebaseException && error.code == 'permission-denied') {
+      try {
+        final stored = roleFromKey((await api.users.fetch(id))?.role);
+        if (stored != null &&
+            stored != Role.contractor &&
+            stored != Role.client) {
+          return t['directChatWrongRole']
+              .replaceAll('{role}', roleLabel(stored));
+        }
+      } catch (_) {}
+    }
+    return t['actionFailed'];
+  }
+
+  /// The phone for Call now on a profile opened from Find. Readable only for
+  /// the role pairs firestore.rules allow (contractor -> labourer, client ->
+  /// labourer/contractor) and never when the owner has blocked me.
+  Future<String> contactPhoneFor(String userId) async {
+    final api = backend;
+    if (api == null || api.uid == null || isBlocked(userId)) return '';
+    try {
+      return await api.users.fetchContactPhone(userId);
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// Re-enters an existing direct thread from the Messages list. The thread
+  /// already exists and I am a participant, so nothing is written to open it.
+  Future<void> resumeDirectThread(ThreadDoc thread, Screen back) async {
+    final api = backend;
+    final id = api?.uid;
+    if (api == null || id == null || !thread.participants.contains(id)) return;
+    final peerId = thread.otherParticipant(id);
+    _threadId = thread.id;
+    openChat(null, peerId, back, peerName: thread.names[peerId] ?? '');
+    try {
+      await api.chat.markRead(thread.id, id);
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  /// My direct conversations that have at least one message, newest first,
+  /// without anyone I have blocked.
+  Stream<List<ThreadDoc>> directThreadsFeed() {
+    final api = backend;
+    final id = api?.uid;
+    if (api == null || id == null) return Stream.value(const []);
+    return api.chat.watchThreads(id).map((threads) => threads
+        .where((th) => th.isDirect && !isBlocked(th.otherParticipant(id)))
+        .toList());
   }
 
   Future<void> sendChatLive(String text) async {

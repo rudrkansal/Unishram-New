@@ -8,6 +8,7 @@ import '../../theme.dart';
 import '../../backend/experience.dart';
 import '../../backend/models.dart';
 import '../../widgets/common.dart';
+import '../../widgets/direct_threads_section.dart';
 import '../../widgets/account_actions.dart';
 import '../../widgets/feed_builder.dart';
 import '../../widgets/unread_dot.dart';
@@ -584,25 +585,33 @@ class LabourerApplications extends StatelessWidget {
     final app = context.appWatch;
     final t = app.t;
 
-    return FeedBuilder<ApplicationDoc>(
-      stream: app.myApplications(),
-      emptyText: t['noApplicationsYet'],
-      builder: (context, applications) => ListView.separated(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-        itemCount: applications.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 10),
-        itemBuilder: (context, i) {
-          final application = applications[i];
-          return StreamBuilder<Job?>(
-            stream: app.jobStream(application.jobId),
-            builder: (context, snapshot) {
-              final job = snapshot.data;
-              if (job == null) return const SizedBox.shrink();
-              return _ApplicationCard(app: app, t: t, job: job, application: application);
-            },
-          );
-        },
-      ),
+    return Column(
+      children: [
+        const DirectThreadsSection(back: Screen.labourerApplications),
+        Expanded(
+          child: FeedBuilder<ApplicationDoc>(
+            stream: app.myApplications(),
+            emptyText: t['noApplicationsYet'],
+            builder: (context, applications) => ListView.separated(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+              itemCount: applications.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (context, i) {
+                final application = applications[i];
+                return StreamBuilder<Job?>(
+                  stream: app.jobStream(application.jobId),
+                  builder: (context, snapshot) {
+                    final job = snapshot.data;
+                    if (job == null) return const SizedBox.shrink();
+                    return _ApplicationCard(
+                        app: app, t: t, job: job, application: application);
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
