@@ -170,7 +170,9 @@ exports.onReview = onDocumentCreated("reviews/{reviewId}", async (event) => {
  *
  * Not removed here: chats, reviews and reports.
  */
-exports.deleteAccount = onCall(async (request) => {
+// invoker "public" lets the app reach the function at all (Cloud Run level); the Firebase sign-in check below
+// still decides who may delete — and only ever their own account. Without it Cloud Run refused every call.
+exports.deleteAccount = onCall({invoker: "public"}, async (request) => {
   const uid = request.auth && request.auth.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Sign in first.");
 

@@ -7,6 +7,8 @@ import '../../theme.dart';
 import '../../widgets/common.dart';
 import '../../widgets/account_actions.dart';
 import '../../widgets/feed_builder.dart';
+import '../../widgets/direct_threads_section.dart';
+import '../../widgets/profile_contact_actions.dart';
 import '../../widgets/report_block_sheet.dart';
 import '../../widgets/search_tier_bar.dart';
 import '../coming_soon_screen.dart';
@@ -24,6 +26,7 @@ class ClientSearch extends StatelessWidget {
 
     return Column(
       children: [
+        const DirectThreadsSection(back: Screen.clientSearch),
         Padding(
           padding: const EdgeInsets.fromLTRB(18, 14, 18, 4),
           child: Row(
@@ -114,7 +117,6 @@ class ClientContractorDetail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = context.appWatch;
-    final t = app.t;
     final c = app.selectedContractor;
 
     return ListView(
@@ -137,16 +139,14 @@ class ClientContractorDetail extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 24),
-        // No direct chat from the Find screens (chat is job-scoped), and other
-        // users' phones are not on public profiles — Contact only appears where
-        // a phone is actually available (offline sample data).
-        if (c.phone.isNotEmpty)
-          PrimaryButton(t['contact'],
-              onTap: () => context.app.openContact(ContactTarget(
-                    name: c.name,
-                    subtitle: '${c.location} · ${c.projects}',
-                    phone: c.phone,
-                  ))),
+        if (c.id != app.uid)
+          ProfileContactActions(
+            app: app,
+            peerId: c.id,
+            peerName: c.name,
+            back: Screen.clientContractorDetail,
+            fallbackPhone: c.phone,
+          ),
       ],
     );
   }

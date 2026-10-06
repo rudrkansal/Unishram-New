@@ -342,10 +342,14 @@ const Map<String, String> _en = {
   'rateThem': 'Rate',
   'rated': 'Rated',
   'rateWorker': 'Rate Worker',
-  'contactAfterApply':
-      'Call and message become available once this worker applies to one of your jobs.',
-  'callAfterApply':
-      'Calling becomes available once this worker applies to one of your jobs.',
+  'directChatWrongRole':
+      'Your account is registered as {role}, so it cannot start a direct message.',
+  'messageNow': 'Message now',
+  'accountRoleLocked':
+      'This account is registered as {role}. To use UniShram in another role, sign out and register with a different mobile number.',
+  'noPhoneOnProfile': 'No phone number on this profile yet.',
+  'roleMismatchError':
+      'This mobile number is already registered as {existing}. To use it, go back and choose {existing}. To register as {chosen}, use a different number.',
   'filledLabel': 'Filled',
   'filledDisclaimer':
       'This job post has been removed from workers\' job listings because the position has been filled.',
@@ -705,10 +709,14 @@ const Map<String, String> _hi = {
   'rateThem': 'रेटिंग दें',
   'rated': 'रेटिंग दी गई',
   'rateWorker': 'मज़दूर को रेटिंग दें',
-  'contactAfterApply':
-      'जब यह मज़दूर आपकी किसी नौकरी के लिए आवेदन करेगा, तब कॉल और संदेश उपलब्ध होंगे।',
-  'callAfterApply':
-      'जब यह मज़दूर आपकी किसी नौकरी के लिए आवेदन करेगा, तब कॉल कर पाएँगे।',
+  'directChatWrongRole':
+      'आपका खाता {role} के रूप में दर्ज है, इसलिए आप सीधे संदेश शुरू नहीं कर सकते।',
+  'messageNow': 'अभी संदेश भेजें',
+  'accountRoleLocked':
+      'यह खाता {role} के रूप में दर्ज है। किसी दूसरी भूमिका में UniShram इस्तेमाल करने के लिए साइन आउट करें और दूसरे मोबाइल नंबर से जुड़ें।',
+  'noPhoneOnProfile': 'इस प्रोफ़ाइल पर अभी फ़ोन नंबर नहीं है।',
+  'roleMismatchError':
+      'यह मोबाइल नंबर पहले से {existing} के रूप में दर्ज है। इसे इस्तेमाल करने के लिए वापस जाकर {existing} चुनें। {chosen} के रूप में जुड़ने के लिए दूसरा नंबर इस्तेमाल करें।',
   'filledDisclaimer':
       'यह पद भर चुका है, इसलिए यह नौकरी अब मज़दूरों की नौकरी सूची में नहीं दिखेगी।',
   'jobMarkedFilled': 'नौकरी भरी हुई के रूप में दर्ज हो गई',
@@ -977,10 +985,14 @@ const Map<String, String> _pa = {
   'rateThem': 'ਰੇਟਿੰਗ ਦਿਓ',
   'rated': 'ਰੇਟਿੰਗ ਦਿੱਤੀ',
   'rateWorker': 'ਮਜ਼ਦੂਰ ਨੂੰ ਰੇਟਿੰਗ ਦਿਓ',
-  'contactAfterApply':
-      'ਜਦੋਂ ਇਹ ਮਜ਼ਦੂਰ ਤੁਹਾਡੀ ਕਿਸੇ ਨੌਕਰੀ ਲਈ ਅਰਜ਼ੀ ਦੇਵੇਗਾ, ਤਾਂ ਕਾਲ ਅਤੇ ਸੁਨੇਹਾ ਉਪਲਬਧ ਹੋਣਗੇ।',
-  'callAfterApply':
-      'ਜਦੋਂ ਇਹ ਮਜ਼ਦੂਰ ਤੁਹਾਡੀ ਕਿਸੇ ਨੌਕਰੀ ਲਈ ਅਰਜ਼ੀ ਦੇਵੇਗਾ, ਤਾਂ ਤੁਸੀਂ ਕਾਲ ਕਰ ਸਕੋਗੇ।',
+  'directChatWrongRole':
+      'ਤੁਹਾਡਾ ਖਾਤਾ {role} ਵਜੋਂ ਦਰਜ ਹੈ, ਇਸ ਲਈ ਤੁਸੀਂ ਸਿੱਧਾ ਸੁਨੇਹਾ ਸ਼ੁਰੂ ਨਹੀਂ ਕਰ ਸਕਦੇ।',
+  'messageNow': 'ਹੁਣੇ ਸੁਨੇਹਾ ਭੇਜੋ',
+  'accountRoleLocked':
+      'ਇਹ ਖਾਤਾ {role} ਵਜੋਂ ਦਰਜ ਹੈ। ਕਿਸੇ ਹੋਰ ਭੂਮਿਕਾ ਵਿੱਚ UniShram ਵਰਤਣ ਲਈ ਸਾਈਨ ਆਉਟ ਕਰੋ ਅਤੇ ਕਿਸੇ ਹੋਰ ਮੋਬਾਈਲ ਨੰਬਰ ਨਾਲ ਜੁੜੋ।',
+  'noPhoneOnProfile': 'ਇਸ ਪ੍ਰੋਫ਼ਾਈਲ \'ਤੇ ਹਾਲੇ ਫ਼ੋਨ ਨੰਬਰ ਨਹੀਂ ਹੈ।',
+  'roleMismatchError':
+      'ਇਹ ਮੋਬਾਈਲ ਨੰਬਰ ਪਹਿਲਾਂ ਹੀ {existing} ਵਜੋਂ ਦਰਜ ਹੈ। ਇਸ ਨੂੰ ਵਰਤਣ ਲਈ ਵਾਪਸ ਜਾ ਕੇ {existing} ਚੁਣੋ। {chosen} ਵਜੋਂ ਜੁੜਨ ਲਈ ਕੋਈ ਹੋਰ ਨੰਬਰ ਵਰਤੋ।',
   'filledDisclaimer':
       'ਇਹ ਅਸਾਮੀ ਭਰ ਚੁੱਕੀ ਹੈ, ਇਸ ਲਈ ਇਹ ਨੌਕਰੀ ਹੁਣ ਮਜ਼ਦੂਰਾਂ ਦੀ ਨੌਕਰੀ ਸੂਚੀ ਵਿੱਚ ਨਹੀਂ ਦਿਖੇਗੀ।',
   'jobMarkedFilled': 'ਨੌਕਰੀ ਭਰੀ ਹੋਈ ਵਜੋਂ ਦਰਜ ਹੋ ਗਈ',

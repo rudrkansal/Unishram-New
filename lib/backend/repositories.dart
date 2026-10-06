@@ -241,6 +241,21 @@ class UserRepository {
     return legacy;
   }
 
+  /// Another user's phone for Call now. firestore.rules decide who may read
+  /// it (role pair + not blocked); refused or missing returns ''. Profiles not
+  /// yet migrated still carry it on the profile itself.
+  Future<String> fetchContactPhone(String uid) async {
+    try {
+      final phone = (await _privateContact(uid).get()).data()?['phone'];
+      if (phone is String && phone.isNotEmpty) return phone;
+    } on FirebaseException catch (_) {}
+    try {
+      final legacy = (await _users.doc(uid).get()).data()?['phone'];
+      if (legacy is String) return legacy;
+    } on FirebaseException catch (_) {}
+    return '';
+  }
+
   Future<void> patch(String uid, Map<String, dynamic> fields) =>
       _users.doc(uid).set({
         ...fields,

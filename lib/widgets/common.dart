@@ -90,8 +90,18 @@ class AppTextField extends StatefulWidget {
     this.fontSize = 16,
     this.onEditingComplete,
     this.textAlign = TextAlign.start,
+    this.controller,
+    this.onSubmitted,
+    this.textInputAction,
+    this.autofillHints,
   });
 
+  /// Lets a caller read the live text (including any not-yet-committed
+  /// keyboard composition) instead of waiting for [onChanged].
+  final TextEditingController? controller;
+  final ValueChanged<String>? onSubmitted;
+  final TextInputAction? textInputAction;
+  final Iterable<String>? autofillHints;
   final String initial;
   final ValueChanged<String> onChanged;
   final String? hint;
@@ -110,7 +120,7 @@ class AppTextField extends StatefulWidget {
 
 class _AppTextFieldState extends State<AppTextField> {
   late final TextEditingController _c =
-      TextEditingController(text: widget.initial);
+      widget.controller ?? TextEditingController(text: widget.initial);
   late final FocusNode _focus = FocusNode();
 
   @override
@@ -133,7 +143,7 @@ class _AppTextFieldState extends State<AppTextField> {
 
   @override
   void dispose() {
-    _c.dispose();
+    if (widget.controller == null) _c.dispose();
     _focus.dispose();
     super.dispose();
   }
@@ -144,6 +154,9 @@ class _AppTextFieldState extends State<AppTextField> {
       controller: _c,
       focusNode: _focus,
       onChanged: widget.onChanged,
+      onSubmitted: widget.onSubmitted,
+      textInputAction: widget.textInputAction,
+      autofillHints: widget.autofillHints,
       keyboardType: widget.keyboardType,
       maxLines: widget.maxLines,
       textAlign: widget.textAlign,

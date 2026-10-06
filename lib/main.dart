@@ -107,6 +107,7 @@ Future<void> main() async {
   final state = AppState(backend: backend);
   await state.load();
   await state.checkTermsOnStart();
+  unawaited(state.reconcileRoleWithAccount());
   // Public config, needed before sign-in too (onboarding shows minimum wage),
   // so this fires regardless of auth state and never blocks first paint.
   unawaited(state.loadMinWageConfig());

@@ -556,6 +556,26 @@ const List<Skill> kSkills = [
     'sa': 'नाग-तांत्रिक',
     'kok': 'सिव्हिल तंत्रज्ञ'
   }),
+  Skill('gardener', 'unskilled', 'general', 'Gardener', {
+    'en': 'Gardener',
+    'hi': 'माली',
+    'pa': 'ਮਾਲੀ',
+    'ta': 'தோட்டக்காரர்',
+    'te': 'తోటమాలి',
+    'mr': 'माळी',
+    'gu': 'માળી',
+    'bn': 'মালী',
+    'ur': 'مالی',
+    'kn': 'ತೋಟಗಾರ',
+    'ml': 'തോട്ടക്കാരൻ',
+    'as': 'মালী',
+    'or': 'ମାଳୀ',
+    'ks': 'مالی',
+    'sd': 'مالهي',
+    'ne': 'माली',
+    'sa': 'उद्यानपालः',
+    'kok': 'माळी'
+  }),
   Skill('other_skilled', 'skilled', 'general', 'Other Skilled Worker', {
     'en': 'Other Skilled Worker',
     'hi': 'अन्य कुशल मजदूर',
@@ -1054,6 +1074,7 @@ const Map<String, int> kDefaultSkillWage = {
   'supervisor': 900,
   'surveyor': 850,
   'civil_technician': 800,
+  'gardener': 450,
   'other_skilled': 700,
 };
 

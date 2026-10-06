@@ -10,6 +10,7 @@ import '../../widgets/account_actions.dart';
 import '../../widgets/common.dart';
 import '../../widgets/direct_threads_section.dart';
 import '../../widgets/feed_builder.dart';
+import '../../widgets/profile_contact_actions.dart';
 import '../../widgets/rate_dialog.dart';
 import '../../widgets/report_block_sheet.dart';
 import '../../widgets/search_tier_bar.dart';
@@ -901,136 +902,29 @@ class WorkerDetail extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 24),
-        // Contractors message any labourer through a direct thread. Phones are
-        // not on public profiles, so Call still needs this worker's
-        // application to one of my jobs (which shares their number with me).
-        // Offline sample workers carry a phone directly.
-        if (w.id != app.uid)
+        if (w.id != app.uid) ...[
+          ProfileContactActions(
+            app: app,
+            peerId: w.id,
+            peerName: w.name,
+            back: Screen.contractorWorkerDetail,
+            fallbackPhone: w.phone,
+          ),
+          const SizedBox(height: 12),
+          // A review is tied to a job, so rate against this worker's
+          // application to one of my jobs when there is one.
           FutureBuilder<ApplicationDoc?>(
             future: app.applicationFromWorker(w.id),
-            builder: (context, snapshot) {
-              final a = snapshot.data;
-              final checking =
-                  snapshot.connectionState != ConnectionState.done;
-              final phone =
-                  (a?.workerPhone.isNotEmpty ?? false) ? a!.workerPhone : w.phone;
-              final direct = app.role == Role.contractor;
-              final VoidCallback? onMessage = direct
-                  ? () => context.app.openDirectChat(
-                        peerId: w.id,
-                        peerName: w.name,
-                        back: Screen.contractorWorkerDetail,
-                      )
-                  : a == null
-                      ? null
-                      : () => context.app.openChatLive(
-                            peerId: w.id,
-                            peerName: w.name,
-                            jobId: a.jobId,
-                            back: Screen.contractorWorkerDetail,
-                          );
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _ContactButton(
-                          icon: Icons.call,
-                          label: t['callNow'],
-                          filled: true,
-                          onTap: phone.isEmpty ? null : () => dialPhone(phone),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _ContactButton(
-                          icon: Icons.chat_bubble_outline,
-                          label: t['sendMessage'],
-                          filled: false,
-                          onTap: onMessage,
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (!checking && phone.isEmpty) ...[
-                    const SizedBox(height: 8),
-                    Text(direct ? t['callAfterApply'] : t['contactAfterApply'],
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                            fontSize: 12, color: C.textSecondary)),
-                  ],
-                  const SizedBox(height: 12),
-                  RateButton(
-                    app: app,
-                    t: t,
-                    aboutUserId: w.id,
-                    jobId: a?.jobId ?? app.selectedJobId ?? '',
-                    aboutName: w.name,
-                  ),
-                ],
-              );
-            },
+            builder: (context, snapshot) => RateButton(
+              app: app,
+              t: t,
+              aboutUserId: w.id,
+              jobId: snapshot.data?.jobId ?? app.selectedJobId ?? '',
+              aboutName: w.name,
+            ),
           ),
+        ],
       ],
-    );
-  }
-}
-
-class _ContactButton extends StatelessWidget {
-  const _ContactButton({
-    required this.icon,
-    required this.label,
-    required this.filled,
-    required this.onTap,
-  });
-  final IconData icon;
-  final String label;
-  final bool filled;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final on = onTap != null;
-    final fg = !on
-        ? C.mutedSoft
-        : filled
-            ? Colors.white
-            : C.accent;
-    return Semantics(
-      button: true,
-      enabled: on,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Container(
-          constraints: const BoxConstraints(minHeight: 52),
-          alignment: Alignment.center,
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-          decoration: BoxDecoration(
-            color: !on
-                ? C.surfaceMuted
-                : filled
-                    ? C.accent
-                    : C.accentTint,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 19, color: fg),
-              const SizedBox(width: 7),
-              Flexible(
-                child: Text(label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontSize: 14.5, fontWeight: FontWeight.w700, color: fg)),
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 }

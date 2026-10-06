@@ -71,9 +71,29 @@ service cloud.firestore {
         && get(jobPath).data.postedBy in participants;
     }
 
-    // A direct (job-less) thread: only a contractor may open it, only with a
-    // labourer, never while either side has blocked the other or the
-    // contractor is suspended. The id and participant order are canonical
+    // Who may contact whom straight from Find/discovery (Call now / Message now):
+    // a contractor -> a labourer; a client -> a labourer or a contractor.
+    function contactPairAllowed(viewerRole, ownerRole) {
+      return (viewerRole == 'contractor' && ownerRole == 'labourer')
+        || (viewerRole == 'client' && (ownerRole == 'labourer' || ownerRole == 'contractor'));
+    }
+
+    // The owner's private phone (users/{owner}/private/contact) is readable by
+    // a signed-in, non-suspended viewer of an allowed role pair, unless the
+    // owner has blocked them. It is never on the public profile.
+    function canSeeContactOf(owner) {
+      let viewer = /databases/$(database)/documents/users/$(request.auth.uid);
+      let ownerDoc = /databases/$(database)/documents/users/$(owner);
+      return signedIn()
+        && exists(viewer) && exists(ownerDoc)
+        && get(viewer).data.get('suspended', false) != true
+        && contactPairAllowed(get(viewer).data.get('role', null), get(ownerDoc).data.get('role', null))
+        && !exists(/databases/$(database)/documents/users/$(owner)/blocks/$(request.auth.uid));
+    }
+
+    // A direct (job-less) thread: opened by the contacting side of an allowed
+    // pair (contactPairAllowed), never while either side has blocked the other
+    // or the opener is suspended. The id and participant order are canonical
     // (direct_<lowerUid>_<higherUid>), so one pair can only ever have one.
     function canOpenDirectThread(threadId, data) {
       let p = data.participants;
@@ -88,9 +108,8 @@ service cloud.firestore {
         && me in p
         && threadId == 'direct_' + p[0] + '_' + p[1]
         && exists(mine) && exists(theirs)
-        && get(mine).data.get('role', null) == 'contractor'
         && get(mine).data.get('suspended', false) != true
-        && get(theirs).data.get('role', null) == 'labourer'
+        && contactPairAllowed(get(mine).data.get('role', null), get(theirs).data.get('role', null))
         && !exists(/databases/$(database)/documents/users/$(other)/blocks/$(me))
         && !exists(/databases/$(database)/documents/users/$(me)/blocks/$(other));
     }
@@ -134,10 +153,11 @@ service cloud.firestore {
       // applications and photos go with it.
       allow delete: if false;
 
-      // Private contact details: only the owner can read or write them. Other
-      // users get a contractor's number solely via contractorContacts/{jobId}.
+      // Private contact details: only the owner writes them. The phone doc is
+      // also readable by the roles allowed to contact this user from Find
+      // (canSeeContactOf); every other private doc (e.g. terms) is owner-only.
       match /private/{docId} {
-        allow read: if isSelf(uid);
+        allow read: if isSelf(uid) || (docId == 'contact' && canSeeContactOf(uid));
         allow create, update: if isSelf(uid)
           && docId == 'contact'
           && request.resource.data.keys().hasOnly(['phone', 'updatedAt'])

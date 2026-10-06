@@ -584,6 +584,7 @@ class AppState extends ChangeNotifier {
   String? chatPeerId;
   String? chatPeerName;
   Screen chatBackScreen = Screen.contractorHome;
+
   String? selectedJobId;
   Job? _selectedFeedJob;
   String? selectedWorkerId;
@@ -859,6 +860,13 @@ class AppState extends ChangeNotifier {
   }
 
   void selectRole(Role r) {
+    // A signed-in account keeps the role it registered with (firestore.rules
+    // never let it change), so picking another one here must not just swap
+    // the screens while every permission still follows the stored role.
+    if (signedIn) {
+      unawaited(_selectRoleSignedIn(r));
+      return;
+    }
     role = r;
     if (r == Role.vendor) {
       screen = Screen.vendorComingSoon;
@@ -869,6 +877,47 @@ class AppState extends ChangeNotifier {
       screen = Screen.profilePersonal;
     }
     _changed();
+  }
+
+  Future<void> _selectRoleSignedIn(Role r) async {
+    Role? accountRole = role;
+    final api = backend;
+    final id = api?.uid;
+    if (api != null && id != null) {
+      try {
+        accountRole = roleFromKey((await api.users.fetch(id))?.role) ?? role;
+      } catch (_) {}
+    }
+    if (accountRole != null && accountRole != r) {
+      showToast(t['accountRoleLocked']
+          .replaceAll('{role}', roleLabel(accountRole)));
+      return;
+    }
+    update(() {
+      role = r;
+      screen = r == Role.vendor ? Screen.vendorComingSoon : defaultScreenFor(r);
+    });
+  }
+
+  /// A phone left showing a different role than its account (from before
+  /// role switching was locked) is put back on the account's real role.
+  Future<void> reconcileRoleWithAccount() async {
+    final api = backend;
+    final id = api?.uid;
+    if (api == null || id == null || role == null) return;
+    Role? stored;
+    try {
+      stored = roleFromKey((await api.users.fetch(id)
+              .timeout(const Duration(seconds: 6)))
+          ?.role);
+    } catch (_) {
+      return;
+    }
+    if (stored == null || stored == role) return;
+    update(() {
+      role = stored;
+      screen = defaultScreenFor(stored!);
+    });
   }
 
   void switchRole() {
@@ -900,7 +949,11 @@ class AppState extends ChangeNotifier {
     if (screen == Screen.blockedUsers) {
       return go(accountBackScreen);
     }
-    go(_backMap[screen] ?? Screen.roleSelect);
+    final mapped = _backMap[screen];
+    if (mapped != null) return go(mapped);
+    // Back on a home screen never drops a signed-in user into role selection.
+    if (signedIn && role != null) return go(defaultScreenFor(role!));
+    go(Screen.roleSelect);
   }
 
   /// Where Blocked users returns to — whichever profile screen (labourer,
@@ -1497,7 +1550,9 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> verifyOtp() async {
-    if (otpCode.length < 6) return;
+    // One verification in flight at a time: Verify, ✓ and a quick double tap
+    // can all land together.
+    if (otpCode.length < 6 || otpSending || lp.phoneVerified) return;
     // Belt-and-braces alongside the UI disabling Verify during a local
     // throttle cooldown — never let a verify attempt through early even if
     // something else triggers this call.
@@ -1566,6 +1621,23 @@ class AppState extends ChangeNotifier {
   Future<void> _afterSignIn() async {
     final api = backend;
     if (api == null) return;
+    // A number already registered under another role must not be silently
+    // turned into that role (and have this onboarding overwritten by the old
+    // profile): the role on a profile can never change (firestore.rules).
+    final existingRole = await _existingRoleConflict(api);
+    if (existingRole != null) {
+      await api.auth.signOut();
+      update(() {
+        lp.phoneVerified = false;
+        otpSent = false;
+        otpCode = '';
+        otpSentAt = null;
+        authError = t['roleMismatchError']
+            .replaceAll('{existing}', roleLabel(existingRole))
+            .replaceAll('{chosen}', roleLabel(role!));
+      });
+      return;
+    }
     await api.registerForPush();
     await syncFromServer();
 
@@ -1596,6 +1668,30 @@ class AppState extends ChangeNotifier {
     await pushProfile();
     _startSuspensionCheck(); // Monitor for suspension changes
   }
+
+  /// The role an existing profile for this login holds, when it differs from
+  /// the role chosen on this device. Null when there is no profile yet, it
+  /// matches, or nothing was chosen.
+  Future<Role?> _existingRoleConflict(Backend api) async {
+    final id = api.uid;
+    final chosen = role;
+    if (id == null || chosen == null) return null;
+    final doc = await api.users.fetch(id);
+    return existingRoleConflict(chosen: chosen, storedRole: doc?.role);
+  }
+
+  static Role? existingRoleConflict(
+      {required Role chosen, required String? storedRole}) {
+    final stored = roleFromKey(storedRole);
+    return stored != null && stored != chosen ? stored : null;
+  }
+
+  String roleLabel(Role r) => switch (r) {
+        Role.labourer => t['roleLabourer'],
+        Role.contractor => t['roleContractor'],
+        Role.client => t['roleClient'],
+        Role.vendor => t['roleVendor'],
+      };
 
   /// Overwrites local state with the server's copy when one exists.
   Future<void> syncFromServer() async {
@@ -3070,23 +3166,23 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Who may start a direct (job-less) chat: a contractor, with someone else
-  /// who is not blocked. firestore.rules enforce the same, plus the peer
-  /// being a labourer and neither side having blocked the other.
+  /// Who may start a direct (job-less) chat: a contractor or a client, with
+  /// someone else who is not blocked. firestore.rules also check the peer's
+  /// role (contractor -> labourer, client -> labourer/contractor) and blocks.
   static bool canStartDirectChat({
     required Role? myRole,
     required String? myUid,
     required String peerId,
     required bool peerBlocked,
   }) =>
-      myRole == Role.contractor &&
+      (myRole == Role.contractor || myRole == Role.client) &&
       myUid != null &&
       peerId.isNotEmpty &&
       peerId != 'me' &&
       peerId != myUid &&
       !peerBlocked;
 
-  /// Message from a labourer's profile in Find. No application is needed;
+  /// Message now from a profile opened via Find. No application is needed;
   /// the conversation lives in one stable `direct_<uidA>_<uidB>` thread, and
   /// no phone number is involved.
   Future<void> openDirectChat({
@@ -3116,9 +3212,9 @@ class AppState extends ChangeNotifier {
         other: peerId,
         otherName: peerName,
       );
-    } catch (_) {
+    } catch (e) {
       _threadId = null;
-      showToast(t['actionFailed']);
+      showToast(await _directChatFailureText(api, id, e));
       return;
     }
     openChat(null, peerId, back, peerName: peerName);
@@ -3126,6 +3222,38 @@ class AppState extends ChangeNotifier {
       await api.chat.markRead(_threadId!, id);
     } catch (_) {}
     notifyListeners();
+  }
+
+  /// The rules only let a profile stored as a contractor open a direct
+  /// thread. When the stored role differs from the one on this device, say so
+  /// instead of a generic failure.
+  Future<String> _directChatFailureText(
+      Backend api, String id, Object error) async {
+    if (error is FirebaseException && error.code == 'permission-denied') {
+      try {
+        final stored = roleFromKey((await api.users.fetch(id))?.role);
+        if (stored != null &&
+            stored != Role.contractor &&
+            stored != Role.client) {
+          return t['directChatWrongRole']
+              .replaceAll('{role}', roleLabel(stored));
+        }
+      } catch (_) {}
+    }
+    return t['actionFailed'];
+  }
+
+  /// The phone for Call now on a profile opened from Find. Readable only for
+  /// the role pairs firestore.rules allow (contractor -> labourer, client ->
+  /// labourer/contractor) and never when the owner has blocked me.
+  Future<String> contactPhoneFor(String userId) async {
+    final api = backend;
+    if (api == null || api.uid == null || isBlocked(userId)) return '';
+    try {
+      return await api.users.fetchContactPhone(userId);
+    } catch (_) {
+      return '';
+    }
   }
 
   /// Re-enters an existing direct thread from the Messages list. The thread

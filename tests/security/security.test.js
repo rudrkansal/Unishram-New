@@ -50,7 +50,11 @@ const expectOk = async (p) => assert.equal(await code(p), "ok");
 // Jobs can only be created by the postJob Cloud Function (rules: `allow create: if false`).
 const callCode = async (client, fn, data) => { try { await httpsCallable(client.functions, fn)(data); return "ok"; } catch (e) { return e.code || String(e); } };
 const waitFor = async (fn, ms = 15000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await fn()) return true; await new Promise((r) => setTimeout(r, 250)); } return false; };
-const validJob = (extra = {}) => ({title: "Test job", description: "d", wage: 500, ...extra});
+const {minimumWageFor} = require(path.join(__dirname, "..", "..", "functions", "min_wage"));
+// Fixtures pay exactly the legal minimum for the job's own state/trade (the national skilled floor when neither is
+// given), so they stay valid if the wage table changes. Tests about below-minimum wages pass their own wage.
+const VALID_WAGE = minimumWageFor(undefined, undefined);
+const validJob = (extra = {}) => ({title: "Test job", description: "d", wage: minimumWageFor(extra.state, extra.skill), ...extra});
 async function postJobOk(client, extra = {}) {
   const res = await httpsCallable(client.functions, "postJob")(validJob(extra));
   assert.ok(res.data.jobId, "postJob should return a jobId");
@@ -58,7 +62,7 @@ async function postJobOk(client, extra = {}) {
 }
 // Test-fixture job created with the Admin SDK (as a server would). Still fires the real onJobPosted trigger.
 const seedJob = (id, postedBy, extra = {}) => admin.firestore().doc(`jobs/${id}`).set({
-  postedBy, title: "t", description: "d", wage: 500, status: "open", applicantCount: 0, ...extra});
+  postedBy, title: "t", description: "d", wage: minimumWageFor(extra.state, extra.skill), status: "open", applicantCount: 0, ...extra});
 
 let jobId, threadId;
 
@@ -267,16 +271,27 @@ describe("Firestore rules: direct (Find) threads", () => {
     await expectDenied(getDoc(tRef(clients.anon, id)));
   });
 
-  test("D4. only contractor -> labourer: labourer, client, contractor->contractor and self are refused", async () => {
+  test("D4. labourer-initiated, contractor->contractor, contractor->client and self are refused", async () => {
     const {dcC, dcC2, dcW2, dcW3, dcClient} = dc;
     await expectDenied(setDoc(tRef(dcW2, directId(dcW2, dcC2)), directData(dcW2, dcC2)));
     await expectDenied(setDoc(tRef(dcW2, directId(dcW2, dcW3)), directData(dcW2, dcW3)));
-    await expectDenied(setDoc(tRef(dcClient, directId(dcClient, dcW3)), directData(dcClient, dcW3)));
     await expectDenied(setDoc(tRef(dcC, directId(dcC, dcC2)), directData(dcC, dcC2)));
+    await expectDenied(setDoc(tRef(dcC, directId(dcC, dcClient)), directData(dcC, dcClient)));
     await expectDenied(setDoc(tRef(dcC, `direct_${dcC.uid}_${dcC.uid}`),
       {participants: [dcC.uid, dcC.uid], jobId: null, kind: "direct"}));
     // A contractor cannot open a thread between two other people.
     await expectDenied(setDoc(tRef(dcC, directId(dcW2, dcW3)), directData(dcW2, dcW3)));
+  });
+
+  test("D4b. a client may open direct threads with a labourer and with a contractor, and both sides can message", async () => {
+    const {dcClient, dcW3, dcC} = dc;
+    for (const peer of [dcW3, dcC]) {
+      const id = directId(dcClient, peer);
+      await expectOk(setDoc(tRef(dcClient, id), directData(dcClient, peer), {merge: true}));
+      await expectOk(setDoc(mRef(dcClient, id, `cl-${peer.uid}`), {senderId: dcClient.uid, text: "Need work done"}));
+      await expectOk(setDoc(mRef(peer, id, `re-${peer.uid}`), {senderId: peer.uid, text: "Sure"}));
+      await expectDenied(getDoc(tRef(dc.dcOut, id)));
+    }
   });
 
   test("D5. blocking either way prevents opening, and the blocked side cannot send", async () => {
@@ -487,7 +502,8 @@ describe("Firestore rules: users / jobs protected-field regression", () => {
   test("R7. legitimate job edits by the poster -> allowed", async () => {
     const contractor = clients.rpost2;
     const r = doc(contractor.db, "jobs", `pj-edit-${run}`);
-    await expectOk(updateDoc(r, {title: "Edited title", wage: 600}));
+    await expectOk(updateDoc(r, {title: "Edited title"}));
+    await expectDenied(updateDoc(r, {wage: VALID_WAGE + 100}));   // the wage is fixed once posted
     await expectOk(updateDoc(r, {status: "closed"}));
     await expectOk(setDoc(r, {description: "merged edit"}, {merge: true}));
   });
@@ -514,7 +530,8 @@ describe("Firestore rules: applicantCount / lastJobPostedAt regression + rate li
   });
   test("L3. legit job edit with applicantCount untouched / unchanged -> allowed (also after the real onApplication bump)", async () => {
     const r = doc(clients.poster.db, "jobs", ratedJob);
-    await expectOk(updateDoc(r, {title: "Edited", wage: 700}));
+    await expectOk(updateDoc(r, {title: "Edited"}));
+    await expectDenied(updateDoc(r, {wage: VALID_WAGE + 100}));   // the wage is fixed once posted
     await expectOk(updateDoc(r, {applicantCount: 0, description: "same count resent"}));
     // Real server-side path: a real application fires onApplication, which bumps the count; a client edit resending it is fine.
     const w = clients.newapp;
@@ -540,7 +557,7 @@ describe("Firestore rules: applicantCount / lastJobPostedAt regression + rate li
   test("L7. rate limit: 2nd post refused; client cannot bypass by direct create or by touching the stamp; server clock elapse -> allowed", async () => {
     const c = clients.poster;
     assert.equal(await callCode(c, "postJob", validJob()), "functions/resource-exhausted");
-    await expectDenied(setDoc(doc(c.db, "jobs", `rl2-${run}`), {postedBy: c.uid, title: "t", description: "d", wage: 500, status: "open", applicantCount: 0}));
+    await expectDenied(setDoc(doc(c.db, "jobs", `rl2-${run}`), {postedBy: c.uid, title: "t", description: "d", wage: VALID_WAGE, status: "open", applicantCount: 0}));
     await expectDenied(updateDoc(doc(c.db, "users", c.uid), {lastJobPostedAt: deleteField()}));
     assert.equal(await callCode(c, "postJob", validJob()), "functions/resource-exhausted");
     // Simulate the 15s cooldown elapsing by back-dating the stamp (Admin SDK) -> allowed again
@@ -566,12 +583,24 @@ describe("Cloud Function triggers (real): onJobPosted / onApplication", () => {
 
   test("T1. postJob + real onJobPosted: job created; wage flags written by the trigger; lastJobPostedAt stamped by the callable", async () => {
     const c = clients.trigContractor;
-    tj = await postJobOk(c, {title: "Trigger job", wage: 100, state: "Maharashtra", skill: "Helper"});
+    assert.equal(await callCode(c, "postJob", validJob({wage: 100, state: "Maharashtra", skill: "Helper"})), "functions/invalid-argument");
+    tj = await postJobOk(c, {title: "Trigger job", state: "Maharashtra", skill: "Helper"});
     const job = await poll(async () => { const d = await adb().doc(`jobs/${tj}`).get(); return d.get("minWageAtPost") !== undefined ? d : null; });
     assert.ok(job, "onJobPosted should set minWageAtPost");
-    assert.equal(job.get("belowMinimumWage"), true);
+    assert.equal(job.get("wage"), 595);
+    assert.equal(job.get("minWageAtPost"), 595);
+    assert.equal(job.get("belowMinimumWage"), false);
     const user = await adb().doc(`users/${c.uid}`).get();
     assert.ok(user.get("lastJobPostedAt"), "postJob should have stamped users/{uid}.lastJobPostedAt");
+  });
+
+  test("T1b. onJobPosted still flags a below-minimum job written server-side (e.g. a legacy job)", async () => {
+    const id = `legacy-low-${run}`;
+    await seedJob(id, clients.trigOther.uid, {wage: 100, state: "Maharashtra", skill: "Helper"});
+    const job = await poll(async () => { const d = await adb().doc(`jobs/${id}`).get(); return d.get("minWageAtPost") !== undefined ? d : null; });
+    assert.ok(job, "onJobPosted should set minWageAtPost");
+    assert.equal(job.get("minWageAtPost"), 595);
+    assert.equal(job.get("belowMinimumWage"), true);
   });
 
   test("T2. onJobPosted: contractorContacts/{jobId} created with the phone, and the public job doc exposes no phone", async () => {
@@ -722,6 +751,40 @@ describe("Phone privacy: users/{uid}/private/contact", () => {
     await expectDenied(setDoc(doc(o.db, "contractorContacts", contractorJob), {contractorPhone: "x"}));
     await expectDenied(updateDoc(doc(w.db, "contractorContacts", contractorJob), {contractorPhone: "x"}));
   });
+  test("P11. Find contact: contractor reads a labourer's phone; client reads a labourer's and a contractor's; nobody else", async () => {
+    const mk = async (n, role) => {
+      const c = await makeClient(n);
+      await setDoc(prof(c), {role, fullName: `Contact ${n}`});
+      await setDoc(priv(c), {phone: `+91900000${String(Math.floor(Math.random() * 10000)).padStart(4, "0")}`, updatedAt: serverTimestamp()});
+      return c;
+    };
+    const lab = await mk("p10lab", "labourer"), lab2 = await mk("p10lab2", "labourer");
+    const con = await mk("p10con", "contractor"), con2 = await mk("p10con2", "contractor");
+    const cli = await mk("p10cli", "client"), ven = await mk("p10ven", "vendor");
+    await expectOk(getDoc(priv(con, lab.uid)));
+    await expectOk(getDoc(priv(cli, lab.uid)));
+    await expectOk(getDoc(priv(cli, con.uid)));
+    // everyone else stays private
+    await expectDenied(getDoc(priv(lab2, lab.uid)));   // labourer -> labourer
+    await expectDenied(getDoc(priv(lab, con.uid)));    // labourer -> contractor
+    await expectDenied(getDoc(priv(con2, con.uid)));   // contractor -> contractor
+    await expectDenied(getDoc(priv(con, cli.uid)));    // contractor -> client
+    await expectDenied(getDoc(priv(ven, lab.uid)));    // vendor -> labourer
+    await expectDenied(getDoc(priv(clients.anon, lab.uid)));
+    // only the phone doc: the terms doc stays owner-only; nobody but the owner writes
+    await setDoc(doc(lab.db, "users", lab.uid, "private", "terms"), {termsVersion: "1.0", termsAcceptedAt: serverTimestamp()});
+    await expectDenied(getDoc(doc(con.db, "users", lab.uid, "private", "terms")));
+    await expectDenied(setDoc(priv(con, lab.uid), {phone: "+910000000000"}));
+    // blocking hides it again; unblocking restores; a suspended viewer cannot read
+    const block = doc(lab.db, "users", lab.uid, "blocks", con.uid);
+    await setDoc(block, {at: Timestamp.now()});
+    await expectDenied(getDoc(priv(con, lab.uid)));
+    await deleteDoc(block);
+    await expectOk(getDoc(priv(con, lab.uid)));
+    await admin.firestore().doc(`users/${cli.uid}`).update({suspended: true});
+    await expectDenied(getDoc(priv(cli, lab.uid)));
+  });
+
   test("P9. deleteAccount (real function) removes the private phone doc with the account", async () => {
     const d = clients.delUser;
     await setDoc(prof(d), {role: "labourer", fullName: "To delete"});
@@ -843,7 +906,7 @@ describe("Production-finding reproductions against the CURRENT local rules", () 
   test("S4. contractorPhone on public jobs: no client can create a job at all; the callable stores no phone; updates cannot add/change one", async () => {
     const {cpA: a, cpB: b} = clients;
     for (const c of [a, b]) await setDoc(doc(c.db, "users", c.uid), {role: "contractor", fullName: "cp"});
-    const base = (c, extra = {}) => ({postedBy: c.uid, title: "t", description: "d", wage: 500, status: "open", applicantCount: 0, ...extra});
+    const base = (c, extra = {}) => ({postedBy: c.uid, title: "t", description: "d", wage: VALID_WAGE, status: "open", applicantCount: 0, ...extra});
     // direct client creates are denied outright (with or without a phone)
     for (const extra of [{}, {contractorPhone: ""}, {contractorPhone: "+919000000000"}]) {
       await expectDenied(setDoc(doc(a.db, "jobs", `cp-direct-${run}`), base(a, extra)));
@@ -865,7 +928,8 @@ describe("Production-finding reproductions against the CURRENT local rules", () 
       await expectDenied(updateDoc(r, {contractorPhone: "+919000000000"}));
       await expectDenied(setDoc(r, {contractorPhone: "+919000000000"}, {merge: true}));
       await expectOk(updateDoc(r, {title: "still editable", contractorPhone: ""}));
-      await expectOk(updateDoc(r, {wage: 600}));
+      await expectOk(updateDoc(r, {description: "edited"}));
+      await expectDenied(updateDoc(r, {wage: VALID_WAGE + 100}));
     }
     // legacy job that already has a phone (as the 9 production jobs do)
     const legacy = `cp-legacy-${run}`;
@@ -997,16 +1061,17 @@ describe("postJob callable (the only job-creation path) — rate limit, validati
   test("J11. direct client job create is denied for everyone, even a valid body from a user who never posted", async () => {
     const c = clients.pjNoUser;
     await mkUser(c);
-    await expectDenied(setDoc(doc(c.db, "jobs", `direct-${run}`), {postedBy: c.uid, title: "t", description: "d", wage: 500, status: "open", applicantCount: 0}));
-    await expectDenied(setDoc(doc(clients.anon.db, "jobs", `direct-anon-${run}`), {postedBy: "x", title: "t", description: "d", wage: 500, status: "open", applicantCount: 0}));
+    await expectDenied(setDoc(doc(c.db, "jobs", `direct-${run}`), {postedBy: c.uid, title: "t", description: "d", wage: VALID_WAGE, status: "open", applicantCount: 0}));
+    await expectDenied(setDoc(doc(clients.anon.db, "jobs", `direct-anon-${run}`), {postedBy: "x", title: "t", description: "d", wage: VALID_WAGE, status: "open", applicantCount: 0}));
   });
 
   test("J12. jobs made by the callable still get the trigger's wage flags and a protected contractorContacts doc", async () => {
     const c = clients.pjGeo;
     await admin.firestore().doc(`users/${c.uid}`).update({lastJobPostedAt: new Date(Date.now() - 60000)});
-    const id = await postJobOk(c, {wage: 100, state: "Maharashtra", skill: "Helper"});
+    const id = await postJobOk(c, {state: "Maharashtra", skill: "Helper"});
     let j; for (let i = 0; i < 80 && !(j = (await admin.firestore().doc(`jobs/${id}`).get())).get("minWageAtPost"); i++) await new Promise((r) => setTimeout(r, 250));
-    assert.equal(j.get("belowMinimumWage"), true);
+    assert.equal(j.get("minWageAtPost"), 595);
+    assert.equal(j.get("belowMinimumWage"), false);
     let cc; for (let i = 0; i < 80 && !(cc = await admin.firestore().doc(`contractorContacts/${id}`).get()).exists; i++) await new Promise((r) => setTimeout(r, 250));
     assert.equal(cc.get("contractorId"), c.uid);
   });
@@ -1031,4 +1096,45 @@ describe("Cloud Functions: migration callables", () => {
       assert.equal(got, adminExpected === "ok" ? "ok" : `functions/${adminExpected}`);
     });
   }
+});
+
+describe("postJob minimum wage by occupation (Gardener + existing categories)", () => {
+  // Punjab: unskilled 519, semi_skilled 553, skilled 593. Unknown state: national floor (unskilled 556).
+  const cases = [
+    ["wgGardener", "Gardener", "Punjab", 519],
+    ["wgGardenerFloor", "Gardener", "", 556],
+    ["wgHelper", "Helper", "Punjab", 519],
+    ["wgRoad", "Road Worker", "Punjab", 553],
+    ["wgMason", "Mason", "Punjab", 593],
+  ];
+  const wc = {};
+  before(async () => {
+    for (const [n] of cases) {
+      wc[n] = await makeClient(n);
+      await setDoc(doc(wc[n].db, "users", wc[n].uid), {role: "contractor", fullName: `Test ${n}`});
+    }
+  });
+  const job = (skill, state, wage) => ({title: `${skill} job`, description: "d", skill, state, wage});
+  const call = async (c, data) => {
+    try { await httpsCallable(c.functions, "postJob")(data); return {code: "ok"}; } catch (e) { return {code: e.code, details: e.details}; }
+  };
+
+  for (const [n, skill, state, minimum] of cases) {
+    test(`W. ${skill} in ${state || "an unknown state"}: ₹${minimum - 1} refused, ₹${minimum} accepted`, async () => {
+      const below = await call(wc[n], job(skill, state, minimum - 1));
+      assert.equal(below.code, "functions/invalid-argument");
+      assert.equal(below.details.minimumWage, minimum);
+      assert.equal((await call(wc[n], job(skill, state, minimum))).code, "ok");
+    });
+  }
+
+  test("W. onJobPosted records the unskilled minimum on a Gardener job", async () => {
+    const snap = await admin.firestore().collection("jobs").where("postedBy", "==", wc.wgGardener.uid).get();
+    assert.equal(snap.size, 1);
+    const ref = snap.docs[0].ref;
+    assert.ok(await waitFor(async () => (await ref.get()).get("minWageAtPost") !== undefined));
+    const j = (await ref.get()).data();
+    assert.equal(j.minWageAtPost, 519);
+    assert.equal(j.belowMinimumWage, false);
+  });
 });
