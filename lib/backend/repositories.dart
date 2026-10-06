@@ -525,6 +525,26 @@ class ChatRepository {
     return id;
   }
 
+  /// Opens, or reuses, the single direct thread between a contractor and a
+  /// labourer. The id and participant order are canonical, so reopening hits
+  /// the same document and the update rule (participants/kind kept) passes.
+  Future<String> openDirectThread({
+    required String me,
+    required String myName,
+    required String other,
+    required String otherName,
+  }) async {
+    final id = ThreadDoc.directIdFor(me, other);
+    await _threads.doc(id).set({
+      'participants': ThreadDoc.sortedPair(me, other),
+      'names': {me: myName, other: otherName},
+      'jobId': null,
+      'kind': ThreadDoc.kindDirect,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    return id;
+  }
+
   Stream<List<ThreadDoc>> watchThreads(String uid) => _threads
       .where('participants', arrayContains: uid)
       .orderBy('lastMessageAt', descending: true)

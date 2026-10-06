@@ -7,6 +7,7 @@ import '../../theme.dart';
 import '../../widgets/common.dart';
 import '../../widgets/account_actions.dart';
 import '../../widgets/feed_builder.dart';
+import '../../widgets/report_block_sheet.dart';
 import '../../widgets/search_tier_bar.dart';
 import '../coming_soon_screen.dart';
 import 'contractor_screens.dart';
@@ -486,6 +487,17 @@ class _ChatThreadState extends State<ChatThread> {
                   ],
                 ),
               ),
+              if (app.uid != null &&
+                  (app.chatPeerId ?? '').isNotEmpty &&
+                  app.chatPeerId != 'me')
+                IconButton(
+                  tooltip: t['reportAction'],
+                  onPressed: () => showReportBlockSheet(context,
+                      userId: app.chatPeerId,
+                      userName: app.chatWithName,
+                      jobId: app.chatJobId),
+                  icon: const Icon(Icons.more_vert, color: C.mutedSoft),
+                ),
             ],
           ),
         ),

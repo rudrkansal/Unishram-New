@@ -8,6 +8,7 @@ import '../../theme.dart';
 import '../../backend/models.dart';
 import '../../widgets/account_actions.dart';
 import '../../widgets/common.dart';
+import '../../widgets/direct_threads_section.dart';
 import '../../widgets/feed_builder.dart';
 import '../../widgets/rate_dialog.dart';
 import '../../widgets/report_block_sheet.dart';
@@ -21,6 +22,15 @@ class ContractorHome extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.appWatch;
 
+    return Column(
+      children: [
+        const DirectThreadsSection(back: Screen.contractorHome),
+        Expanded(child: _postedJobs(context, app)),
+      ],
+    );
+  }
+
+  Widget _postedJobs(BuildContext context, AppState app) {
     return FeedBuilder<Job>(
       stream: app.myPostedJobsFeed(),
       emptyText: app.t['noJobsPosted'],
@@ -116,6 +126,7 @@ class ContractorApplicants extends StatelessWidget {
         separatorBuilder: (_, __) => const SizedBox(height: 20),
         itemBuilder: (context, jobIndex) {
           final job = jobs[jobIndex];
+          final filled = job.status == 'filled';
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -128,14 +139,22 @@ class ContractorApplicants extends StatelessWidget {
                             fontWeight: FontWeight.w700,
                             color: C.text)),
                   ),
-                  _ActionButton(
-                    label: t['markFilled'] ?? 'Mark Filled',
-                    background: job.status == 'filled' ? C.dangerBg : C.accentTint,
-                    color: job.status == 'filled' ? C.danger : C.accent,
-                    onTap: job.status == 'filled' ? null : () => context.app.markJobFilled(job.id),
+                  const SizedBox(width: 10),
+                  _FilledButton(
+                    filled: filled,
+                    label: filled ? t['filledLabel'] : t['markFilled'],
+                    onTap: filled
+                        ? null
+                        : () => context.app.markJobFilled(job.id),
                   ),
                 ],
               ),
+              if (filled) ...[
+                const SizedBox(height: 6),
+                Text(t['filledDisclaimer'],
+                    style: const TextStyle(
+                        fontSize: 11.5, height: 1.35, color: C.textSecondary)),
+              ],
               const SizedBox(height: 12),
               StreamBuilder<List<ApplicationDoc>>(
                 stream: app.applicationsForJob(job.id),
@@ -335,6 +354,39 @@ class _ActionButton extends StatelessWidget {
               textAlign: TextAlign.center,
               style: TextStyle(
                   fontSize: 12.5, fontWeight: FontWeight.w700, color: color)),
+        ),
+      );
+}
+
+/// Green "Mark Filled" until the job is filled, then a red, inert "Filled".
+class _FilledButton extends StatelessWidget {
+  const _FilledButton(
+      {required this.filled, required this.label, required this.onTap});
+  final bool filled;
+  final String label;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        enabled: onTap != null,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 40, minWidth: 96),
+            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+            decoration: BoxDecoration(
+                color: filled ? C.danger : C.ok,
+                borderRadius: BorderRadius.circular(8)),
+            child: Text(label,
+                maxLines: 1,
+                style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white)),
+          ),
         ),
       );
 }
@@ -849,32 +901,136 @@ class WorkerDetail extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 24),
-        // No direct chat from the Find screens (chat is job-scoped), and other
-        // users' phones are not on public profiles — so Contact only appears
-        // where a phone is actually available (offline sample data).
-        if (w.phone.isNotEmpty)
-          PrimaryButton(t['contact'],
-              onTap: () => context.app.openContact(ContactTarget(
-                    name: w.name,
-                    subtitle: '${w.skill} · ${w.location}',
-                    phone: w.phone,
-                  ))),
-        if (w.id != app.uid) ...[
-          const SizedBox(height: 12),
-          Row(
+        // Contractors message any labourer through a direct thread. Phones are
+        // not on public profiles, so Call still needs this worker's
+        // application to one of my jobs (which shares their number with me).
+        // Offline sample workers carry a phone directly.
+        if (w.id != app.uid)
+          FutureBuilder<ApplicationDoc?>(
+            future: app.applicationFromWorker(w.id),
+            builder: (context, snapshot) {
+              final a = snapshot.data;
+              final checking =
+                  snapshot.connectionState != ConnectionState.done;
+              final phone =
+                  (a?.workerPhone.isNotEmpty ?? false) ? a!.workerPhone : w.phone;
+              final direct = app.role == Role.contractor;
+              final VoidCallback? onMessage = direct
+                  ? () => context.app.openDirectChat(
+                        peerId: w.id,
+                        peerName: w.name,
+                        back: Screen.contractorWorkerDetail,
+                      )
+                  : a == null
+                      ? null
+                      : () => context.app.openChatLive(
+                            peerId: w.id,
+                            peerName: w.name,
+                            jobId: a.jobId,
+                            back: Screen.contractorWorkerDetail,
+                          );
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _ContactButton(
+                          icon: Icons.call,
+                          label: t['callNow'],
+                          filled: true,
+                          onTap: phone.isEmpty ? null : () => dialPhone(phone),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _ContactButton(
+                          icon: Icons.chat_bubble_outline,
+                          label: t['sendMessage'],
+                          filled: false,
+                          onTap: onMessage,
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (!checking && phone.isEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(direct ? t['callAfterApply'] : t['contactAfterApply'],
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                            fontSize: 12, color: C.textSecondary)),
+                  ],
+                  const SizedBox(height: 12),
+                  RateButton(
+                    app: app,
+                    t: t,
+                    aboutUserId: w.id,
+                    jobId: a?.jobId ?? app.selectedJobId ?? '',
+                    aboutName: w.name,
+                  ),
+                ],
+              );
+            },
+          ),
+      ],
+    );
+  }
+}
+
+class _ContactButton extends StatelessWidget {
+  const _ContactButton({
+    required this.icon,
+    required this.label,
+    required this.filled,
+    required this.onTap,
+  });
+  final IconData icon;
+  final String label;
+  final bool filled;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final on = onTap != null;
+    final fg = !on
+        ? C.mutedSoft
+        : filled
+            ? Colors.white
+            : C.accent;
+    return Semantics(
+      button: true,
+      enabled: on,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 52),
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+          decoration: BoxDecoration(
+            color: !on
+                ? C.surfaceMuted
+                : filled
+                    ? C.accent
+                    : C.accentTint,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              RateButton(
-                app: app,
-                t: t,
-                aboutUserId: w.id,
-                jobId: app.selectedJobId ?? '',
-                aboutName: w.name,
+              Icon(icon, size: 19, color: fg),
+              const SizedBox(width: 7),
+              Flexible(
+                child: Text(label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 14.5, fontWeight: FontWeight.w700, color: fg)),
               ),
             ],
           ),
-        ],
-      ],
+        ),
+      ),
     );
   }
 }
@@ -1075,8 +1231,7 @@ class _CalcRowCard extends StatelessWidget {
                   }),
                 ),
               ),
-              if (app.calcRows.length > 1)
-                IconButton(
+              IconButton(
                   onPressed: () =>
                       context.app.update(() => app.calcRows.removeAt(index)),
                   icon: const Icon(Icons.close, size: 18, color: C.muted),

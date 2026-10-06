@@ -341,6 +341,21 @@ const Map<String, String> _en = {
   'markFilled': 'Mark Filled',
   'rateThem': 'Rate',
   'rated': 'Rated',
+  'rateWorker': 'Rate Worker',
+  'contactAfterApply':
+      'Call and message become available once this worker applies to one of your jobs.',
+  'callAfterApply':
+      'Calling becomes available once this worker applies to one of your jobs.',
+  'filledLabel': 'Filled',
+  'filledDisclaimer':
+      'This job post has been removed from workers\' job listings because the position has been filled.',
+  'jobMarkedFilled': 'Job marked as filled',
+  'messagesTitle': 'Messages',
+  'updateTitle': 'New Update Available',
+  'updateBody':
+      'A newer version of UniShram is available with improvements and fixes.',
+  'updateNow': 'Update Now',
+  'updateLater': 'Later',
   'rateDialogTitle': 'How was your experience?',
   'rateAppMenuLabel': 'Rate this app',
   'rateAppTitle': 'Rate UniShram',
@@ -689,6 +704,20 @@ const Map<String, String> _hi = {
   'noListingsYet': 'आपने अभी कोई सामान नहीं जोड़ा।',
   'rateThem': 'रेटिंग दें',
   'rated': 'रेटिंग दी गई',
+  'rateWorker': 'मज़दूर को रेटिंग दें',
+  'contactAfterApply':
+      'जब यह मज़दूर आपकी किसी नौकरी के लिए आवेदन करेगा, तब कॉल और संदेश उपलब्ध होंगे।',
+  'callAfterApply':
+      'जब यह मज़दूर आपकी किसी नौकरी के लिए आवेदन करेगा, तब कॉल कर पाएँगे।',
+  'filledDisclaimer':
+      'यह पद भर चुका है, इसलिए यह नौकरी अब मज़दूरों की नौकरी सूची में नहीं दिखेगी।',
+  'jobMarkedFilled': 'नौकरी भरी हुई के रूप में दर्ज हो गई',
+  'messagesTitle': 'संदेश',
+  'updateTitle': 'नया अपडेट उपलब्ध है',
+  'updateBody':
+      'UniShram का नया वर्ज़न आ गया है, जिसमें कई सुधार और गड़बड़ियों का समाधान शामिल है।',
+  'updateNow': 'अभी अपडेट करें',
+  'updateLater': 'बाद में',
   'rateDialogTitle': 'आपका अनुभव कैसा रहा?',
   'rateAppMenuLabel': 'इस ऐप को रेट करें',
   'rateAppTitle': 'यूनीश्रम को रेट करें',
@@ -947,6 +976,20 @@ const Map<String, String> _pa = {
   'verifiedMobileBadge': 'ਮੋਬਾਈਲ ਤਸਦੀਕਸ਼ੁਦਾ',
   'rateThem': 'ਰੇਟਿੰਗ ਦਿਓ',
   'rated': 'ਰੇਟਿੰਗ ਦਿੱਤੀ',
+  'rateWorker': 'ਮਜ਼ਦੂਰ ਨੂੰ ਰੇਟਿੰਗ ਦਿਓ',
+  'contactAfterApply':
+      'ਜਦੋਂ ਇਹ ਮਜ਼ਦੂਰ ਤੁਹਾਡੀ ਕਿਸੇ ਨੌਕਰੀ ਲਈ ਅਰਜ਼ੀ ਦੇਵੇਗਾ, ਤਾਂ ਕਾਲ ਅਤੇ ਸੁਨੇਹਾ ਉਪਲਬਧ ਹੋਣਗੇ।',
+  'callAfterApply':
+      'ਜਦੋਂ ਇਹ ਮਜ਼ਦੂਰ ਤੁਹਾਡੀ ਕਿਸੇ ਨੌਕਰੀ ਲਈ ਅਰਜ਼ੀ ਦੇਵੇਗਾ, ਤਾਂ ਤੁਸੀਂ ਕਾਲ ਕਰ ਸਕੋਗੇ।',
+  'filledDisclaimer':
+      'ਇਹ ਅਸਾਮੀ ਭਰ ਚੁੱਕੀ ਹੈ, ਇਸ ਲਈ ਇਹ ਨੌਕਰੀ ਹੁਣ ਮਜ਼ਦੂਰਾਂ ਦੀ ਨੌਕਰੀ ਸੂਚੀ ਵਿੱਚ ਨਹੀਂ ਦਿਖੇਗੀ।',
+  'jobMarkedFilled': 'ਨੌਕਰੀ ਭਰੀ ਹੋਈ ਵਜੋਂ ਦਰਜ ਹੋ ਗਈ',
+  'messagesTitle': 'ਸੁਨੇਹੇ',
+  'updateTitle': 'ਨਵਾਂ ਅੱਪਡੇਟ ਉਪਲਬਧ ਹੈ',
+  'updateBody':
+      'UniShram ਦਾ ਨਵਾਂ ਵਰਜ਼ਨ ਉਪਲਬਧ ਹੈ, ਜਿਸ ਵਿੱਚ ਸੁਧਾਰ ਅਤੇ ਗ਼ਲਤੀਆਂ ਠੀਕ ਕੀਤੀਆਂ ਗਈਆਂ ਹਨ।',
+  'updateNow': 'ਹੁਣੇ ਅੱਪਡੇਟ ਕਰੋ',
+  'updateLater': 'ਬਾਅਦ ਵਿੱਚ',
   'rateDialogTitle': 'ਤੁਹਾਡਾ ਅਨੁਭਵ ਕਿਵੇਂ ਰਿਹਾ?',
   'rateAppMenuLabel': 'ਇਸ ਐਪ ਨੂੰ ਰੇਟ ਕਰੋ',
   'rateAppTitle': 'ਯੂਨੀਸ਼੍ਰਮ ਨੂੰ ਰੇਟ ਕਰੋ',

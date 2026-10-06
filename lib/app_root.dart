@@ -17,6 +17,7 @@ import 'state/app_state.dart';
 import 'theme.dart';
 import 'widgets/app_shell.dart';
 import 'widgets/rating_prompt_gate.dart';
+import 'widgets/update_prompt_gate.dart';
 
 /// The single surface the whole app renders into: header and bottom nav on the
 /// home tier, bare content on the entry tier, with the toast, contact sheet and
@@ -48,9 +49,12 @@ class AppRoot extends StatelessWidget {
                   children: [
                     if (showChrome) const AppHeader(),
                     Expanded(
-                      child: RatingPromptGate(
-                        screen: app.screen,
-                        child: _content(app.screen),
+                      child: UpdatePromptGate(
+                        homeTier: showChrome,
+                        child: RatingPromptGate(
+                          screen: app.screen,
+                          child: _content(app.screen),
+                        ),
                       ),
                     ),
                     if (showChrome) const AppBottomNav(),

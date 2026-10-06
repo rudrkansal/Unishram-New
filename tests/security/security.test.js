@@ -217,6 +217,113 @@ describe("Firestore rules: threads", () => {
   });
 });
 
+describe("Firestore rules: direct (Find) threads", () => {
+  const dc = {};
+  const pair = (a, b) => [a.uid, b.uid].sort();
+  const directId = (a, b) => `direct_${pair(a, b).join("_")}`;
+  const directData = (a, b, extra = {}) => ({participants: pair(a, b), names: {}, jobId: null, kind: "direct", ...extra});
+  const tRef = (c, id) => doc(c.db, "threads", id);
+  const mRef = (c, id, mid) => doc(c.db, "threads", id, "messages", mid);
+
+  before(async () => {
+    for (const [n, role] of [["dcC", "contractor"], ["dcC2", "contractor"], ["dcW", "labourer"], ["dcW2", "labourer"],
+      ["dcW3", "labourer"], ["dcOut", "labourer"], ["dcClient", "client"]]) {
+      dc[n] = await makeClient(n);
+      await setDoc(doc(dc[n].db, "users", dc[n].uid), {role, fullName: `Test ${n}`});
+    }
+  });
+
+  test("D1. contractor opens a direct thread with any labourer (no application) and both can message", async () => {
+    const {dcC, dcW} = dc;
+    const id = directId(dcC, dcW);
+    await expectOk(setDoc(tRef(dcC, id), directData(dcC, dcW), {merge: true}));
+    await expectOk(setDoc(mRef(dcC, id, `d1a-${run}`), {senderId: dcC.uid, text: "Work available?"}));
+    await expectOk(setDoc(mRef(dcW, id, `d1b-${run}`), {senderId: dcW.uid, text: "Yes"}));
+    await expectOk(getDoc(tRef(dcW, id)));
+    await expectOk(getDocs(collection(dcW.db, "threads", id, "messages")));
+  });
+
+  test("D2. reopening reuses the same thread (merge-set allowed, no duplicate id possible)", async () => {
+    const {dcC, dcW} = dc;
+    await expectOk(setDoc(tRef(dcC, directId(dcC, dcW)), directData(dcC, dcW), {merge: true}));
+    // Any other id for the same pair is refused: wrong order, missing prefix, legacy-style id.
+    const [lo, hi] = pair(dcC, dcW);
+    await expectDenied(setDoc(tRef(dcC, `direct_${hi}_${lo}`), directData(dcC, dcW)));
+    await expectDenied(setDoc(tRef(dcC, `${lo}_${hi}`), directData(dcC, dcW)));
+    await expectDenied(setDoc(tRef(dcC, `direct_${lo}_${hi}_x`), directData(dcC, dcW)));
+    await expectDenied(setDoc(tRef(dcC, `dup-${run}`), directData(dcC, dcW)));
+    // Participants must be in canonical order.
+    await expectDenied(setDoc(tRef(dc.dcC2, directId(dc.dcC2, dcW)),
+      {...directData(dc.dcC2, dcW), participants: pair(dc.dcC2, dcW).reverse()}));
+  });
+
+  test("D3. outsiders cannot read, list or post in a direct thread", async () => {
+    const {dcC, dcW, dcOut} = dc;
+    const id = directId(dcC, dcW);
+    await expectDenied(getDoc(tRef(dcOut, id)));
+    await expectDenied(getDocs(collection(dcOut.db, "threads", id, "messages")));
+    await expectDenied(setDoc(mRef(dcOut, id, `d3-${run}`), {senderId: dcOut.uid, text: "hi"}));
+    await expectDenied(setDoc(mRef(dcOut, id, `d3b-${run}`), {senderId: dcC.uid, text: "spoof"}));
+    await expectDenied(getDoc(tRef(clients.anon, id)));
+  });
+
+  test("D4. only contractor -> labourer: labourer, client, contractor->contractor and self are refused", async () => {
+    const {dcC, dcC2, dcW2, dcW3, dcClient} = dc;
+    await expectDenied(setDoc(tRef(dcW2, directId(dcW2, dcC2)), directData(dcW2, dcC2)));
+    await expectDenied(setDoc(tRef(dcW2, directId(dcW2, dcW3)), directData(dcW2, dcW3)));
+    await expectDenied(setDoc(tRef(dcClient, directId(dcClient, dcW3)), directData(dcClient, dcW3)));
+    await expectDenied(setDoc(tRef(dcC, directId(dcC, dcC2)), directData(dcC, dcC2)));
+    await expectDenied(setDoc(tRef(dcC, `direct_${dcC.uid}_${dcC.uid}`),
+      {participants: [dcC.uid, dcC.uid], jobId: null, kind: "direct"}));
+    // A contractor cannot open a thread between two other people.
+    await expectDenied(setDoc(tRef(dcC, directId(dcW2, dcW3)), directData(dcW2, dcW3)));
+  });
+
+  test("D5. blocking either way prevents opening, and the blocked side cannot send", async () => {
+    const {dcC2, dcW2, dcW3, dcC} = dc;
+    const block = (owner, target) => doc(owner.db, "users", owner.uid, "blocks", target.uid);
+    await setDoc(block(dcW2, dcC2), {at: Timestamp.now()});
+    await expectDenied(setDoc(tRef(dcC2, directId(dcC2, dcW2)), directData(dcC2, dcW2)));
+    await deleteDoc(block(dcW2, dcC2));
+    await setDoc(block(dcC2, dcW3), {at: Timestamp.now()});
+    await expectDenied(setDoc(tRef(dcC2, directId(dcC2, dcW3)), directData(dcC2, dcW3)));
+    await deleteDoc(block(dcC2, dcW3));
+    // Existing thread: once the labourer blocks the contractor, the contractor's messages are refused.
+    const id = directId(dcC, dc.dcW);
+    await setDoc(block(dc.dcW, dcC), {at: Timestamp.now()});
+    await expectDenied(setDoc(mRef(dcC, id, `d5-${run}`), {senderId: dcC.uid, text: "still there?"}));
+    await deleteDoc(block(dc.dcW, dcC));
+    await expectOk(setDoc(mRef(dcC, id, `d5b-${run}`), {senderId: dcC.uid, text: "ok"}));
+  });
+
+  test("D6. a direct thread cannot be turned into anything else, and shape must be exact", async () => {
+    const {dcC, dcW, dcC2, dcW3} = dc;
+    const id = directId(dcC, dcW);
+    await expectDenied(updateDoc(tRef(dcC, id), {kind: "job"}));
+    await expectDenied(updateDoc(tRef(dcW, id), {kind: deleteField()}));
+    await expectDenied(updateDoc(tRef(dcC, id), {jobId: jobId}));
+    await expectDenied(updateDoc(tRef(dcC, id), {participants: [dcC.uid, dc.dcOut.uid].sort()}));
+    await expectDenied(setDoc(tRef(dcC2, directId(dcC2, dcW3)), directData(dcC2, dcW3, {kind: "other"})));
+    await expectDenied(setDoc(tRef(dcC2, directId(dcC2, dcW3)), directData(dcC2, dcW3, {jobId: jobId})));
+    await expectDenied(setDoc(tRef(dcC2, directId(dcC2, dcW3)),
+      {...directData(dcC2, dcW3), participants: [...pair(dcC2, dcW3), dc.dcOut.uid]}));
+  });
+
+  test("D7. job threads cannot carry the direct marker", async () => {
+    const {worker, contractor} = clients;
+    await expectDenied(setDoc(doc(worker.db, "threads", `jk-${run}`),
+      {...threadData([worker.uid, contractor.uid]), kind: "direct"}));
+  });
+
+  test("D8. a suspended contractor cannot open new direct threads", async () => {
+    const {dcC2, dcW3} = dc;
+    await admin.firestore().doc(`users/${dcC2.uid}`).update({suspended: true});
+    await expectDenied(setDoc(tRef(dcC2, directId(dcC2, dcW3)), directData(dcC2, dcW3)));
+    await admin.firestore().doc(`users/${dcC2.uid}`).update({suspended: false});
+    await expectOk(setDoc(tRef(dcC2, directId(dcC2, dcW3)), directData(dcC2, dcW3)));
+  });
+});
+
 describe("Firestore rules: applications", () => {
   const appRef = (c, jid, uid) => doc(c.db, "applications", `${jid}_${uid}`);
   const body = (c, extra = {}) => ({jobId, workerId: c.uid, contractorId: clients.contractor.uid, status: "pending", ...extra});

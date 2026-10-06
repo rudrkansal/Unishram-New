@@ -29,18 +29,47 @@ class RateButton extends StatelessWidget {
       future: app.hasReviewed(aboutUserId, jobId),
       builder: (context, snapshot) {
         final rated = snapshot.data ?? false;
-        return TextButton(
-          onPressed: rated
-              ? null
-              : () => showRateDialog(context,
-                  aboutUserId: aboutUserId,
-                  jobId: jobId,
-                  aboutName: aboutName),
-          child: Text(rated ? t['rated'] : t['rateThem'],
-              style: TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w700,
-                  color: rated ? C.mutedSoft : C.accent)),
+        final color = rated ? C.mutedSoft : C.accent;
+        return Semantics(
+          button: true,
+          enabled: !rated,
+          child: InkWell(
+            onTap: rated
+                ? null
+                : () => showRateDialog(context,
+                    aboutUserId: aboutUserId,
+                    jobId: jobId,
+                    aboutName: aboutName),
+            borderRadius: BorderRadius.circular(12),
+            child: Container(
+              width: double.infinity,
+              constraints: const BoxConstraints(minHeight: 52),
+              alignment: Alignment.center,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: rated ? C.surfaceMuted : C.surface,
+                border: Border.all(
+                    color: rated ? C.border : C.accent, width: 1.5),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(rated ? Icons.star : Icons.star_border,
+                      size: 20, color: color),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(rated ? t['rated'] : t['rateWorker'],
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: color)),
+                  ),
+                ],
+              ),
+            ),
+          ),
         );
       },
     );

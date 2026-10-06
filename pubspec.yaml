@@ -42,6 +42,8 @@ dependencies:
   record: ^6.2.1
   path_provider: ^2.1.5
   firebase_app_check: ^0.4.8
+  in_app_update: ^4.2.5
+  upgrader: ^13.7.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

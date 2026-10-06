@@ -397,6 +397,12 @@ class ThreadDoc {
   final DateTime? lastMessageAt;
   final Map<String, int> unread;
 
+  /// 'direct' for a contractor → labourer conversation opened from Find;
+  /// null for job threads.
+  final String? kind;
+
+  static const kindDirect = 'direct';
+
   const ThreadDoc({
     required this.id,
     required this.participants,
@@ -406,12 +412,27 @@ class ThreadDoc {
     this.lastMessage = '',
     this.lastMessageAt,
     this.unread = const {},
+    this.kind,
   });
+
+  bool get isDirect => kind == kindDirect;
 
   static String idFor(String a, String b, {String? jobId}) {
     final pair = [a, b]..sort();
     return jobId == null ? pair.join('_') : '${pair.join('_')}_$jobId';
   }
+
+  /// One stable thread per pair of users, separate from job threads and from
+  /// legacy job-less threads (firestore.rules require exactly this id).
+  static String directIdFor(String a, String b) {
+    final pair = sortedPair(a, b);
+    return 'direct_${pair[0]}_${pair[1]}';
+  }
+
+  static List<String> sortedPair(String a, String b) => [a, b]..sort();
+
+  String otherParticipant(String me) =>
+      participants.firstWhere((p) => p != me, orElse: () => '');
 
   Map<String, dynamic> toMap() => {
         'participants': participants,
@@ -437,6 +458,7 @@ class ThreadDoc {
       unread: (d['unread'] as Map?)
               ?.map((k, v) => MapEntry('$k', v is num ? v.toInt() : 0)) ??
           const {},
+      kind: _s(d['kind']),
     );
   }
 }

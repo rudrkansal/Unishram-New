@@ -608,15 +608,31 @@ class AppState extends ChangeNotifier {
   String postEndDate = '';
   String postHoursPerDay = '';
 
-  List<CalcRow> calcRows = [
-    CalcRow('mason', 5, 750, 30),
-    CalcRow('excavator', 1, 650, 10),
-    CalcRow('helper', 5, 450, 30),
-  ];
-  int calcMaterial = 50000;
-  int calcEquipment = 10000;
-  int calcTransport = 5000;
-  int calcContingencyPct = 10;
+  List<CalcRow> calcRows = [];
+  int calcMaterial = 0;
+  int calcEquipment = 0;
+  int calcTransport = 0;
+  int calcContingencyPct = kDefaultContingencyPct;
+
+  /// Recommended buffer, not project data — it is 10% of whatever the user
+  /// enters, so a fresh calculator still totals ₹0.
+  static const kDefaultContingencyPct = 10;
+
+  /// True when the saved calculator still holds exactly the demo project
+  /// earlier builds pre-filled (and persisted on first save), untouched.
+  static bool isLegacySampleCalc(List<CalcRow> rows, int material,
+      int equipment, int transport) {
+    String sig(List<CalcRow> r) =>
+        r.map((e) => '${e.skillId}:${e.count}:${e.wage}:${e.days}').join(',');
+    const sampleRows = {
+      'mason:5:750:30,excavator:1:650:10,helper:5:450:30',
+      'mason:5:750:30',
+    };
+    return sampleRows.contains(sig(rows)) &&
+        material == 50000 &&
+        equipment == 10000 &&
+        transport == 5000;
+  }
 
   List<String> extraSkills = ['Mason', 'Helper'];
   String wageExpectation = '750';
@@ -684,11 +700,18 @@ class AppState extends ChangeNotifier {
       calcRows = (d['calcRows'] as List? ?? [])
           .map((e) => CalcRow.fromJson(Map<String, dynamic>.from(e)))
           .toList();
-      if (calcRows.isEmpty) calcRows = [CalcRow('mason', 5, 750, 30)];
       calcMaterial = d['calcMaterial'] ?? calcMaterial;
       calcEquipment = d['calcEquipment'] ?? calcEquipment;
       calcTransport = d['calcTransport'] ?? calcTransport;
       calcContingencyPct = d['calcContingencyPct'] ?? calcContingencyPct;
+      if (isLegacySampleCalc(
+          calcRows, calcMaterial, calcEquipment, calcTransport)) {
+        calcRows = [];
+        calcMaterial = 0;
+        calcEquipment = 0;
+        calcTransport = 0;
+        calcContingencyPct = kDefaultContingencyPct;
+      }
       blockedUserIds = List<String>.from(d['blockedUserIds'] ?? const []);
       blockedUserNames =
           Map<String, String>.from(d['blockedUserNames'] ?? const {});
@@ -802,15 +825,11 @@ class AppState extends ChangeNotifier {
     chatMessages = {};
     extraSkills = ['Mason', 'Helper'];
     wageExpectation = '750';
-    calcRows = [
-      CalcRow('mason', 5, 750, 30),
-      CalcRow('excavator', 1, 650, 10),
-      CalcRow('helper', 5, 450, 30),
-    ];
-    calcMaterial = 50000;
-    calcEquipment = 10000;
-    calcTransport = 5000;
-    calcContingencyPct = 10;
+    calcRows = [];
+    calcMaterial = 0;
+    calcEquipment = 0;
+    calcTransport = 0;
+    calcContingencyPct = kDefaultContingencyPct;
     ownListings = const [
       Listing('ol1', 'Cement (OPC 53)', 370, 'bag'),
       Listing('ol2', 'Sand (River)', 1400, 'ton'),
@@ -2313,8 +2332,10 @@ class AppState extends ChangeNotifier {
       state: p.state,
     )
         .map((docs) {
+      // The query already asks for open jobs; re-checking here keeps a stale
+      // offline-cache copy of a since-filled/closed job out of the feed too.
       final jobs = docs
-          .where((d) => d.status != 'filled')
+          .where((d) => isListedJobStatus(d.status))
           .map((d) => d.toJob(viewerLocation: _myLocation))
           .where((j) => !isBlocked(j.contractorUid))
           .toList();
@@ -2401,6 +2422,10 @@ class AppState extends ChangeNotifier {
   /// this job, as opposed to merely having received the application.
   static bool isApprovedStatus(String status) =>
       status == 'shortlisted' || status == 'hired';
+
+  /// Only open jobs appear in workers' feeds; filled and closed ones are kept
+  /// (for history) but never listed.
+  static bool isListedJobStatus(String status) => status == 'open';
 
   /// True when opening a chat would put the user in a thread with themselves
   /// (Message on a job they posted, or a peer id equal to their own uid).
@@ -2735,6 +2760,32 @@ class AppState extends ChangeNotifier {
     return count;
   }
 
+  /// This worker's application to one of my posted jobs, if any — the only
+  /// link through which chat (job-scoped threads) and their phone are
+  /// available to me. Hired beats shortlisted beats pending; rejected
+  /// applications are ignored because the rules refuse chat on them.
+  Future<ApplicationDoc?> applicationFromWorker(String workerId) async {
+    const rank = {'hired': 0, 'shortlisted': 1};
+    ApplicationDoc? best;
+    for (final job in myPostedJobs) {
+      try {
+        final apps = await applicationsForJob(job.id)
+            .first
+            .timeout(const Duration(seconds: 3));
+        for (final a in apps) {
+          if (a.workerId != workerId || a.status == 'rejected') continue;
+          if (best == null ||
+              (rank[a.status] ?? 2) < (rank[best.status] ?? 2)) {
+            best = a;
+          }
+        }
+      } catch (_) {
+        // Skip a job whose applications can't be read right now.
+      }
+    }
+    return best;
+  }
+
   Stream<List<Review>> reviewFeed() {
     final api = backend;
     final id = api?.uid;
@@ -2946,9 +2997,7 @@ class AppState extends ChangeNotifier {
 
     try {
       await api.jobs.markFilled(jobId);
-      showToast(t['jobMarkedFilled'] ?? 'Job marked as filled');
-      // Refresh jobs list to reflect the filled status immediately
-      await Future.delayed(const Duration(milliseconds: 500));
+      showToast(t['jobMarkedFilled']);
     } catch (_) {
       showToast(t['actionFailed']);
     }
@@ -3019,6 +3068,90 @@ class AppState extends ChangeNotifier {
       await api.chat.markRead(_threadId!, id);
     } catch (_) {}
     notifyListeners();
+  }
+
+  /// Who may start a direct (job-less) chat: a contractor, with someone else
+  /// who is not blocked. firestore.rules enforce the same, plus the peer
+  /// being a labourer and neither side having blocked the other.
+  static bool canStartDirectChat({
+    required Role? myRole,
+    required String? myUid,
+    required String peerId,
+    required bool peerBlocked,
+  }) =>
+      myRole == Role.contractor &&
+      myUid != null &&
+      peerId.isNotEmpty &&
+      peerId != 'me' &&
+      peerId != myUid &&
+      !peerBlocked;
+
+  /// Message from a labourer's profile in Find. No application is needed;
+  /// the conversation lives in one stable `direct_<uidA>_<uidB>` thread, and
+  /// no phone number is involved.
+  Future<void> openDirectChat({
+    required String peerId,
+    required String peerName,
+    required Screen back,
+  }) async {
+    final api = backend;
+    final id = api?.uid;
+    if (api == null || id == null) {
+      openChat(null, peerId, back, peerName: peerName);
+      return;
+    }
+    if (!canStartDirectChat(
+        myRole: role,
+        myUid: id,
+        peerId: peerId,
+        peerBlocked: isBlocked(peerId))) {
+      showToast(t['actionFailed']);
+      return;
+    }
+    _threadId = null;
+    try {
+      _threadId = await api.chat.openDirectThread(
+        me: id,
+        myName: displayName,
+        other: peerId,
+        otherName: peerName,
+      );
+    } catch (_) {
+      _threadId = null;
+      showToast(t['actionFailed']);
+      return;
+    }
+    openChat(null, peerId, back, peerName: peerName);
+    try {
+      await api.chat.markRead(_threadId!, id);
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  /// Re-enters an existing direct thread from the Messages list. The thread
+  /// already exists and I am a participant, so nothing is written to open it.
+  Future<void> resumeDirectThread(ThreadDoc thread, Screen back) async {
+    final api = backend;
+    final id = api?.uid;
+    if (api == null || id == null || !thread.participants.contains(id)) return;
+    final peerId = thread.otherParticipant(id);
+    _threadId = thread.id;
+    openChat(null, peerId, back, peerName: thread.names[peerId] ?? '');
+    try {
+      await api.chat.markRead(thread.id, id);
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  /// My direct conversations that have at least one message, newest first,
+  /// without anyone I have blocked.
+  Stream<List<ThreadDoc>> directThreadsFeed() {
+    final api = backend;
+    final id = api?.uid;
+    if (api == null || id == null) return Stream.value(const []);
+    return api.chat.watchThreads(id).map((threads) => threads
+        .where((th) => th.isDirect && !isBlocked(th.otherParticipant(id)))
+        .toList());
   }
 
   Future<void> sendChatLive(String text) async {

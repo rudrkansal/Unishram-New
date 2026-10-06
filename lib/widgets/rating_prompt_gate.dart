@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_scope.dart';
+import '../services/app_update_service.dart';
 import '../state/app_state.dart';
 import 'rate_dialog.dart';
 
@@ -46,6 +47,8 @@ class _RatingPromptGateState extends State<RatingPromptGate> {
       if (!mounted) return;
       final app = context.app;
       final candidate = await app.maybeGetForcedRatingCandidate();
+      // Never stack on top of the update dialog; the next home visit retries.
+      if (AppUpdateService.instance.promptOpen) return;
       if (candidate != null && mounted) {
         await showForcedRateDialog(
           context,
@@ -56,7 +59,7 @@ class _RatingPromptGateState extends State<RatingPromptGate> {
         return;
       }
       if (!mounted || !(await app.shouldShowAppRatePrompt())) return;
-      if (!mounted) return;
+      if (!mounted || AppUpdateService.instance.promptOpen) return;
       await showRateAppDialog(context);
       // Covers every dismissal path (Cancel, tap-outside, back button) —
       // submitting also sets this itself, so this is a harmless no-op then.

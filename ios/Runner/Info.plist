@@ -55,5 +55,9 @@
 	<string>UniShram uses the camera to scan your Aadhaar card and to take your profile and work photos.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>UniShram uses your photos so you can add pictures of your work to your profile.</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>tel</string>
+	</array>
 </dict>
 </plist>

@@ -71,6 +71,30 @@ service cloud.firestore {
         && get(jobPath).data.postedBy in participants;
     }
 
+    // A direct (job-less) thread: only a contractor may open it, only with a
+    // labourer, never while either side has blocked the other or the
+    // contractor is suspended. The id and participant order are canonical
+    // (direct_<lowerUid>_<higherUid>), so one pair can only ever have one.
+    function canOpenDirectThread(threadId, data) {
+      let p = data.participants;
+      let me = request.auth.uid;
+      let other = p[0] == me ? p[1] : p[0];
+      let mine = /databases/$(database)/documents/users/$(me);
+      let theirs = /databases/$(database)/documents/users/$(other);
+      return data.get('kind', null) == 'direct'
+        && data.get('jobId', null) == null
+        && p[0] is string && p[1] is string
+        && p[0] < p[1]
+        && me in p
+        && threadId == 'direct_' + p[0] + '_' + p[1]
+        && exists(mine) && exists(theirs)
+        && get(mine).data.get('role', null) == 'contractor'
+        && get(mine).data.get('suspended', false) != true
+        && get(theirs).data.get('role', null) == 'labourer'
+        && !exists(/databases/$(database)/documents/users/$(other)/blocks/$(me))
+        && !exists(/databases/$(database)/documents/users/$(me)/blocks/$(other));
+    }
+
     match /users/{uid} {
       // Profiles are visible to signed-in users: a contractor has to be able to
       // look at a worker before hiring them.
@@ -214,17 +238,21 @@ service cloud.firestore {
       allow read: if signedIn() && request.auth.uid in resource.data.participants;
 
       // A job thread may only be opened by an applicant whose application is
-      // still live, and only with that job's actual poster.
+      // still live, and only with that job's actual poster. A direct thread
+      // follows canOpenDirectThread.
       allow create: if signedIn()
         && request.resource.data.participants is list
         && request.resource.data.participants.size() == 2
-        && request.resource.data.jobId is string
-        && canOpenJobThread(request.resource.data.jobId, request.resource.data.participants);
+        && ((request.resource.data.jobId is string
+             && request.resource.data.get('kind', null) == null
+             && canOpenJobThread(request.resource.data.jobId, request.resource.data.participants))
+            || canOpenDirectThread(threadId, request.resource.data));
 
       allow update: if signedIn()
         && request.auth.uid in resource.data.participants
         && fieldKept('participants')
         && fieldKept('jobId')
+        && fieldKept('kind')
         && fieldKept('createdAt');
       allow delete: if false;
 
