@@ -1,7 +1,7 @@
 {
   "name": "unishram-functions",
   "description": "Server-side logic for UniShram: notifications, trust flags, moderation, account deletion.",
-  "engines": { "node": "20" },
+  "engines": { "node": "22" },
   "main": "index.js",
   "scripts": {
     "serve": "firebase emulators:start --only functions",
