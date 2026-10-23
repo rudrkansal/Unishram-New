@@ -35,9 +35,33 @@ class AccountApi {
   static Future<String?> _currentIdToken() async =>
       FirebaseAuth.instance.currentUser?.getIdToken();
 
-  Uri get endpoint {
+  Uri get endpoint => _endpoint('deleteAccount');
+
+  Uri _endpoint(String name) {
     final project = _projectId ?? Firebase.app().options.projectId;
-    return Uri.parse('https://$region-$project.cloudfunctions.net/deleteAccount');
+    return Uri.parse('https://$region-$project.cloudfunctions.net/$name');
+  }
+
+  /// Asks the server to end the caller's temporary ban if its time is up
+  /// (the `refreshMyStanding` callable). True when the ban was lifted.
+  Future<bool> refreshStanding() async {
+    final token = await _idToken();
+    if (token == null || token.isEmpty) return false;
+    final res = await _client
+        .post(
+          _endpoint('refreshMyStanding'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+          body: jsonEncode({'data': <String, dynamic>{}}),
+        )
+        .timeout(const Duration(seconds: 20));
+    final body = jsonDecode(res.body);
+    return res.statusCode == 200 &&
+        body is Map &&
+        body['result'] is Map &&
+        (body['result'] as Map)['lifted'] == true;
   }
 
   Future<void> deleteAccount() async {

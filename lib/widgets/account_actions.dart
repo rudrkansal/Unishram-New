@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_scope.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
+import 'moderation_gate.dart';
 import 'rate_dialog.dart';
 
 /// Sign out and account deletion. Both stores reject apps that let a user
@@ -20,6 +21,8 @@ class AccountActions extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const SizedBox(height: 24),
+        const Divider(color: C.border),
+        const AccountStandingTile(),
         const Divider(color: C.border),
         const RateAppTile(),
         const Divider(color: C.border),

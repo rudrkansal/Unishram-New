@@ -241,40 +241,221 @@ exports.revokeUserSession = onCall(async (request) => {
   return {ok: true};
 });
 
-// A person with this many reports against them in the window below is
-// suspended automatically — pending a real moderator queue, this is the only
-// thing standing between a reported user and continuing to use the app.
-const REPORT_SUSPEND_THRESHOLD = 3;
-const REPORT_WINDOW_DAYS = 30;
+// Two-strike moderation. A strike is a report from someone who has actually
+// dealt with the reported person (an application between them, or a direct
+// chat) — a stranger cannot put a strike on anyone. One person counts once
+// however often they report. Strikes expire after STRIKE_WINDOW_DAYS.
+//   1 strike  -> warning (push + a card the person must acknowledge)
+//   2 strikes -> account paused for BAN_DAYS, open jobs closed
+//   3 strikes -> suspended until a moderator reviews it
+// Who reported whom lives only in moderationLedger/{uid} (no client access);
+// the person sees users/{uid}/private/moderation: counts, reasons and dates.
+const STRIKE_WINDOW_DAYS = 90;
+const BAN_DAYS = 7;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** A user reported a job or a person: flag it, and auto-suspend on a pattern. */
+// Reasons that mean the job itself is a trap — it doesn't exist, or it is a
+// front for collecting "registration fees" from workers. This many different
+// reporters close the job for everyone, whatever the poster's strikes.
+const JOB_FRAUD_REASONS = ["fake_job", "asked_money", "scam"];
+const JOB_FRAUD_CLOSE_THRESHOLD = 2;
+
+const reasonsOf = (data) => Array.isArray(data && data.reasons) ? data.reasons : [];
+
+/**
+ * Closes an open job and marks why, so the poster cannot reopen it (see the
+ * `moderationHold` check in the jobs rule). A moderator clears the hold.
+ */
+async function holdJob(ref, hold) {
+  await db.runTransaction(async (tx) => {
+    const job = await tx.get(ref);
+    if (!job.exists || job.get("status") !== "open") return;
+    tx.update(ref, {status: "closed", moderationHold: hold, moderationHoldAt: FieldValue.serverTimestamp()});
+  });
+}
+
+async function holdOpenJobsOf(uid, hold) {
+  // Filter status in code rather than a second where(): no composite index.
+  const jobs = await db.collection("jobs").where("postedBy", "==", uid).get();
+  await Promise.all(jobs.docs
+      .filter((d) => d.get("status") === "open")
+      .map((d) => holdJob(d.ref, hold)));
+}
+
+/** Whether [a] and [b] have dealt with each other: an application or a direct chat. */
+async function haveDealtWith(a, b) {
+  const apps = (worker, hirer) => db.collection("applications")
+      .where("workerId", "==", worker).where("contractorId", "==", hirer).limit(1).get();
+  const [one, other] = await Promise.all([apps(a, b), apps(b, a)]);
+  if (!one.empty || !other.empty) return true;
+  const [lo, hi] = a < b ? [a, b] : [b, a];
+  return (await db.collection("threads").doc(`direct_${lo}_${hi}`).get()).exists;
+}
+
+const moderationView = (uid) => db.collection("users").doc(uid).collection("private").doc("moderation");
+const moderationLedger = (uid) => db.collection("moderationLedger").doc(uid);
+
+/**
+ * Adds a strike from [reporterId] against [uid] and applies the step it
+ * reaches. Returns the outcome, or null when it is not a new strike.
+ */
+async function addStrike(uid, reporterId, reportId, reasons) {
+  return db.runTransaction(async (tx) => {
+    const ledgerRef = moderationLedger(uid);
+    const ledger = await tx.get(ledgerRef);
+    const now = Date.now();
+    const all = (ledger.exists && ledger.get("strikes")) || [];
+    const active = all.filter((st) => st.at.toMillis() > now - STRIKE_WINDOW_DAYS * DAY_MS);
+    if (active.some((st) => st.reporterId === reporterId)) return null;
+    const previous = (ledger.exists && ledger.get("status")) || "clear";
+
+    const strike = {reporterId, reportId, reasons, at: Timestamp.fromMillis(now)};
+    const strikes = [...active, strike];
+    const count = strikes.length;
+    // A permanent suspension is only ever lifted by a moderator.
+    const status = previous === "suspended" || count >= 3 ? "suspended" : count === 2 ? "banned" : "warned";
+    const bannedUntil = status === "banned" ? Timestamp.fromMillis(now + BAN_DAYS * DAY_MS) : null;
+
+    tx.set(ledgerRef, {
+      strikes: [...all, strike], status, bannedUntil, updatedAt: FieldValue.serverTimestamp(),
+    }, {merge: true});
+    tx.set(moderationView(uid), {
+      status,
+      strikeTimes: strikes.map((st) => st.at),
+      lastReasons: reasons,
+      bannedUntil,
+      noticeAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, {merge: true});
+    if (status !== "warned") {
+      tx.set(db.collection("users").doc(uid), {suspended: true}, {merge: true});
+    }
+    return {status, count, bannedUntil};
+  });
+}
+
+const MODERATION_PUSH = {
+  warned: {
+    title: "Warning on your UniShram account / आपके खाते पर चेतावनी",
+    body: "Someone you worked with reported a problem. Another report will pause your account for 7 days. " +
+      "किसी ने आपकी शिकायत की है। एक और शिकायत पर आपका खाता 7 दिन के लिए बंद होगा।",
+  },
+  banned: {
+    title: "Your UniShram account is paused / आपका खाता रोका गया है",
+    body: "After a second report your account is paused for 7 days. Open the app to see why or to appeal. " +
+      "दूसरी शिकायत के बाद आपका खाता 7 दिन के लिए रोका गया है। कारण देखने या अपील के लिए ऐप खोलें।",
+  },
+  suspended: {
+    title: "Your UniShram account is suspended / आपका खाता निलंबित है",
+    body: "After repeated reports your account is suspended until our team reviews it. You can appeal in the app. " +
+      "बार-बार शिकायतों के बाद आपका खाता समीक्षा तक निलंबित है। आप ऐप में अपील कर सकते हैं।",
+  },
+};
+
+/**
+ * A user reported a job or a person. Stamps both sides' roles (from their
+ * profiles, never from the client), closes a job that several people say is a
+ * scam, and applies a strike when the report counts (see addStrike).
+ */
 exports.onReport = onDocumentCreated("reports/{reportId}", async (event) => {
   const report = event.data && event.data.data();
   if (!report) return;
-  console.warn("Report filed", {
-    about: report.aboutUserId || report.jobId,
-    reason: report.reason,
-  });
-
+  const reasons = reasonsOf(report);
   const aboutUserId = report.aboutUserId;
-  if (!aboutUserId) return;
+  console.warn("Report filed", {about: aboutUserId || report.jobId, reasons});
 
-  const cutoff = Timestamp.fromMillis(
-      Date.now() - REPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000);
-  const recent = await db.collection("reports")
-      .where("aboutUserId", "==", aboutUserId)
-      .where("createdAt", ">", cutoff)
-      .count()
-      .get();
+  const [by, about] = await Promise.all([
+    db.collection("users").doc(report.byUserId).get(),
+    aboutUserId ? db.collection("users").doc(aboutUserId).get() : null,
+  ]);
+  const stamp = {
+    byRole: (by.exists && by.get("role")) || null,
+    aboutRole: (about && about.exists && about.get("role")) || null,
+  };
 
-  if (recent.data().count >= REPORT_SUSPEND_THRESHOLD) {
-    await db.collection("users").doc(aboutUserId).set(
-        {suspended: true}, {merge: true});
-    console.warn("Auto-suspended after repeated reports", {
-      uid: aboutUserId,
-      count: recent.data().count,
-    });
+  if (report.jobId && reasons.some((r) => JOB_FRAUD_REASONS.includes(r))) {
+    const jobReports = await db.collection("reports").where("jobId", "==", report.jobId).get();
+    const reporters = new Set(jobReports.docs
+        .filter((d) => reasonsOf(d.data()).some((r) => JOB_FRAUD_REASONS.includes(r)))
+        .map((d) => d.get("byUserId")));
+    if (reporters.size >= JOB_FRAUD_CLOSE_THRESHOLD) {
+      await holdJob(db.collection("jobs").doc(report.jobId), "reported_fraud");
+      console.warn("Job closed after fraud reports", {jobId: report.jobId, reporters: reporters.size});
+    }
   }
+
+  // Why a report did or didn't count is recorded on it for moderators.
+  let strike = "no_subject";
+  if (aboutUserId && about && about.exists) {
+    if (by.exists && by.get("suspended") === true) {
+      strike = "reporter_suspended";
+    } else if (!(await haveDealtWith(report.byUserId, aboutUserId))) {
+      strike = "no_connection";
+    } else {
+      const outcome = await addStrike(aboutUserId, report.byUserId, event.params.reportId, reasons);
+      strike = outcome ? outcome.status : "repeat_reporter";
+      if (outcome) {
+        if (outcome.status !== "warned") await holdOpenJobsOf(aboutUserId, "poster_" + outcome.status);
+        console.warn("Strike applied", {uid: aboutUserId, strikes: outcome.count, status: outcome.status});
+        try {
+          await notify(aboutUserId, MODERATION_PUSH[outcome.status], {type: "moderation", status: outcome.status});
+        } catch (e) {
+          console.error("Moderation push failed", e);
+        }
+      }
+    }
+  }
+  await event.data.ref.set({...stamp, strike}, {merge: true});
+});
+
+/** Ends a temporary ban whose time is up. A permanent suspension is left alone. */
+async function liftBanIfExpired(uid) {
+  const lifted = await db.runTransaction(async (tx) => {
+    const ledgerRef = moderationLedger(uid);
+    const ledger = await tx.get(ledgerRef);
+    if (!ledger.exists || ledger.get("status") !== "banned") return false;
+    const until = ledger.get("bannedUntil");
+    if (!until || until.toMillis() > Date.now()) return false;
+    tx.set(ledgerRef, {status: "warned", bannedUntil: null, updatedAt: FieldValue.serverTimestamp()}, {merge: true});
+    tx.set(moderationView(uid), {
+      status: "warned", bannedUntil: null, updatedAt: FieldValue.serverTimestamp(),
+    }, {merge: true});
+    tx.set(db.collection("users").doc(uid), {suspended: false}, {merge: true});
+    return true;
+  });
+  if (lifted) {
+    // Jobs closed by the ban may be reopened by their poster again.
+    const jobs = await db.collection("jobs").where("postedBy", "==", uid).get();
+    await Promise.all(jobs.docs
+        .filter((d) => d.get("moderationHold") === "poster_banned")
+        .map((d) => d.ref.update({moderationHold: FieldValue.delete()})));
+    console.warn("Temporary ban ended", {uid});
+  }
+  return lifted;
+}
+
+exports.liftExpiredBans = onSchedule("every 60 minutes", async () => {
+  // Single-field range query; status is checked inside liftBanIfExpired.
+  const due = await db.collection("moderationLedger")
+      .where("bannedUntil", "<=", Timestamp.now()).get();
+  for (const d of due.docs) await liftBanIfExpired(d.id);
+});
+
+/** The app's "check again" on the pause screen: lifts the caller's ban if it is over. */
+exports.refreshMyStanding = onCall(async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Sign in first.");
+  const lifted = await liftBanIfExpired(request.auth.uid);
+  const view = await moderationView(request.auth.uid).get();
+  return {lifted, status: (view.exists && view.get("status")) || "clear"};
+});
+
+/** An appeal marks the person's notice as under review until a moderator answers. */
+exports.onAppeal = onDocumentCreated("appeals/{appealId}", async (event) => {
+  const appeal = event.data && event.data.data();
+  if (!appeal || !appeal.byUserId) return;
+  await moderationView(appeal.byUserId).set(
+      {appealPendingAt: FieldValue.serverTimestamp()}, {merge: true});
+  console.warn("Appeal filed", {uid: appeal.byUserId, appealId: event.params.appealId});
 });
 
 // Import migration functions

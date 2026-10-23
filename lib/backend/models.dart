@@ -605,6 +605,72 @@ class ReportDoc {
       };
 }
 
+/// The signed-in user's own warning / pause notice, written only by the
+/// onReport Cloud Function at users/{uid}/private/moderation. It never says
+/// who reported them — only how many strikes, why, and until when.
+class ModerationDoc {
+  /// clear | warned | banned (paused until [bannedUntil]) | suspended
+  final String status;
+  final List<DateTime> strikeTimes;
+  final List<String> lastReasons;
+  final DateTime? bannedUntil;
+
+  /// When the latest warning/pause was issued, and when the user tapped
+  /// "I understand" — a newer notice than the last one read shows again.
+  final DateTime? noticeAt;
+  final DateTime? warningSeenAt;
+  final DateTime? appealPendingAt;
+
+  const ModerationDoc({
+    this.status = 'clear',
+    this.strikeTimes = const [],
+    this.lastReasons = const [],
+    this.bannedUntil,
+    this.noticeAt,
+    this.warningSeenAt,
+    this.appealPendingAt,
+  });
+
+  static const strikeWindow = Duration(days: 90);
+
+  /// Strikes still counting (they expire after [strikeWindow]).
+  List<DateTime> activeStrikes([DateTime? now]) {
+    final cutoff = (now ?? DateTime.now()).subtract(strikeWindow);
+    return strikeTimes.where((at) => at.isAfter(cutoff)).toList()..sort();
+  }
+
+  /// When the oldest active strike stops counting.
+  DateTime? get nextStrikeExpiry {
+    final active = activeStrikes();
+    return active.isEmpty ? null : active.first.add(strikeWindow);
+  }
+
+  bool get locked => status == 'banned' || status == 'suspended';
+
+  bool get warningUnread =>
+      status == 'warned' &&
+      noticeAt != null &&
+      (warningSeenAt == null || warningSeenAt!.isBefore(noticeAt!));
+
+  static ModerationDoc fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
+    final d = doc.data() ?? const {};
+    final times = d['strikeTimes'];
+    final reasons = d['lastReasons'];
+    return ModerationDoc(
+      status: d['status'] ?? 'clear',
+      strikeTimes: times is List
+          ? times.map(_t).whereType<DateTime>().toList()
+          : const [],
+      lastReasons:
+          reasons is List ? reasons.map((r) => '$r').toList() : const [],
+      bannedUntil: _t(d['bannedUntil']),
+      noticeAt: _t(d['noticeAt']),
+      warningSeenAt: _t(d['warningSeenAt']),
+      appealPendingAt: _t(d['appealPendingAt']),
+    );
+  }
+}
+
 /// Server-maintained minimum-wage figures, read from `config/minWage`. State
 /// minimum wages change periodically; keeping the current numbers in a
 /// document a moderator can update — rather than compiled into the app —

@@ -682,6 +682,30 @@ class ReportRepository {
   Future<void> file(ReportDoc report) => _reports.add(report.toMap());
 }
 
+/// The user's own moderation notice and their appeals. The notice is written
+/// only by Cloud Functions; the user may just mark it read.
+class ModerationRepository {
+  ModerationRepository({FirebaseFirestore? db})
+      : _db = db ?? FirebaseFirestore.instance;
+  final FirebaseFirestore _db;
+
+  DocumentReference<Map<String, dynamic>> _notice(String uid) =>
+      _db.collection('users').doc(uid).collection('private').doc('moderation');
+
+  Stream<ModerationDoc> watch(String uid) => _notice(uid)
+      .snapshots()
+      .map((doc) => doc.exists ? ModerationDoc.fromDoc(doc) : const ModerationDoc());
+
+  Future<void> markWarningSeen(String uid) =>
+      _notice(uid).update({'warningSeenAt': FieldValue.serverTimestamp()});
+
+  Future<void> appeal(String uid, String text) => _db.collection('appeals').add({
+        'byUserId': uid,
+        'text': text,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+}
+
 /// Persistent, server-side blocking: a block is a doc at
 /// `users/{me}/blocks/{blockedUid}`. Its existence is what firestore.rules
 /// checks before letting a message be created, so blocking holds even if the

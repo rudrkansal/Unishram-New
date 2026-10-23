@@ -12,6 +12,7 @@ import '../../widgets/direct_threads_section.dart';
 import '../../widgets/account_actions.dart';
 import '../../widgets/feed_builder.dart';
 import '../../widgets/unread_dot.dart';
+import '../../widgets/user_avatar.dart';
 import '../../widgets/report_block_sheet.dart';
 import '../../widgets/search_tier_bar.dart';
 
@@ -369,7 +370,7 @@ class LabourerJobDetail extends StatelessWidget {
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 child: Row(
                   children: [
-                    Avatar(initialsOf(job.contractor)),
+                    UserAvatar(uid: job.contractorUid, name: job.contractor),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -439,7 +440,8 @@ class LabourerJobDetail extends StatelessWidget {
                       onTap: () => showReportBlockSheet(context,
                           userId: job.contractorUid,
                           userName: job.contractor,
-                          jobId: job.id),
+                          jobId: job.id,
+                          aboutEmployer: true),
                       borderRadius: BorderRadius.circular(20),
                       child: const Padding(
                         padding: EdgeInsets.only(left: 6),
@@ -450,6 +452,16 @@ class LabourerJobDetail extends StatelessWidget {
                   ],
                 ),
               ),
+              if (job.contractorUid.isNotEmpty &&
+                  job.contractorUid != app.uid)
+                Align(
+                  alignment: AlignmentDirectional.centerEnd,
+                  child: ReportUserButton(
+                      userId: job.contractorUid,
+                      jobId: job.id,
+                      aboutEmployer: true,
+                      compact: true),
+                ),
               const SizedBox(height: 18),
               Text(t['yourExpectedWageQ'], style: T.label),
               const SizedBox(height: 6),
@@ -706,6 +718,19 @@ class _ApplicationCard extends StatelessWidget {
                     ),
                   ],
                 ),
+                // Wage theft and "fee" scams surface after the worker has
+                // applied or worked, so every application keeps a way to
+                // report the hirer — not just the job page.
+                if (application.contractorId.isNotEmpty &&
+                    application.contractorId != app.uid)
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: ReportUserButton(
+                        userId: application.contractorId,
+                        jobId: job.id,
+                        aboutEmployer: true,
+                        compact: true),
+                  ),
               ],
             ),
           );

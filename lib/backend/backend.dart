@@ -27,6 +27,7 @@ class Backend {
     ReportRepository? reports,
     MinWageRepository? minWage,
     BlockRepository? blocks,
+    ModerationRepository? moderation,
     AccountApi? accounts,
   })  : accounts = accounts ?? AccountApi(),
         auth = auth ?? AuthRepository(),
@@ -39,7 +40,8 @@ class Backend {
         photos = photos ?? PhotoRepository(),
         reports = reports ?? ReportRepository(),
         minWage = minWage ?? MinWageRepository(),
-        blocks = blocks ?? BlockRepository();
+        blocks = blocks ?? BlockRepository(),
+        moderation = moderation ?? ModerationRepository();
 
   final AuthRepository auth;
   final UserRepository users;
@@ -52,6 +54,7 @@ class Backend {
   final ReportRepository reports;
   final MinWageRepository minWage;
   final BlockRepository blocks;
+  final ModerationRepository moderation;
 
   String? get uid => auth.uid;
   bool get isSignedIn => auth.isSignedIn;

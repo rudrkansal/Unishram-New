@@ -442,6 +442,16 @@ class AppState extends ChangeNotifier {
   final PincodeLookup _pincodeLookup = const LocalPincodeLookup();
   final IndiaPostPincodeLookup _indiaPost = const IndiaPostPincodeLookup();
   Timer? _suspensionCheckTimer; // Periodic check for user suspension
+  StreamSubscription<ModerationDoc>? _moderationSub;
+
+  /// The signed-in user's own warning / pause notice (see ModerationDoc).
+  ModerationDoc moderation = const ModerationDoc();
+
+  /// users/{uid}.suspended — also set by a moderator by hand, with no notice.
+  bool _suspendedFlag = false;
+
+  /// The pause screen covers the whole app while this is true.
+  bool get accountLocked => signedIn && (moderation.locked || _suspendedFlag);
 
   bool get online => backend != null;
   bool get signedIn => backend?.isSignedIn ?? false;
@@ -1755,8 +1765,12 @@ class AppState extends ChangeNotifier {
       lp.projectLat = doc.projectLocation?.latitude;
       lp.projectLng = doc.projectLocation?.longitude;
       wageExpectation = lp.expectedWage;
+      _suspendedFlag = doc.suspended;
     });
     await _syncBlockedUsers();
+    // A returning user (app relaunch) never passes through sign-in, so the
+    // warning / pause notice is watched from here too.
+    _startSuspensionCheck();
   }
 
   /// Pulls the server's record of who this user has blocked, so blocking
@@ -1912,34 +1926,105 @@ class AppState extends ChangeNotifier {
     await resetDemo();
   }
 
-  /// Starts periodic suspension checks (every 5 minutes). Signs user out if suspended.
+  /// Watches the user's moderation notice live, and re-reads the suspended
+  /// flag every 5 minutes. A paused or suspended user is no longer signed
+  /// out: the app shows the pause screen (reason, end date, appeal) instead.
   void _startSuspensionCheck() {
+    final api = backend;
+    final id = api?.uid;
+    if (api == null || id == null) return;
+    _moderationSub?.cancel();
+    _moderationSub = api.moderation.watch(id).listen(
+          (m) => update(() => moderation = m),
+          onError: (_) {}, // offline or not yet permitted: keep the last notice
+        );
     _suspensionCheckTimer?.cancel();
     _suspensionCheckTimer =
-        Timer.periodic(const Duration(minutes: 5), (_) async {
-      final api = backend;
-      final id = api?.uid;
-      if (api == null || id == null || !signedIn) return;
-      try {
-        final user = await api.users.fetch(id);
-        if (user?.suspended ?? false) {
-          // User is suspended - force sign out
-          await signOut();
-          update(() {
-            authError = t['userSuspendedError'];
-            screen = Screen.splash;
-          });
-        }
-      } catch (_) {
-        // Ignore errors - suspension check is non-critical
+        Timer.periodic(const Duration(minutes: 5), (_) => _checkSuspension());
+  }
+
+  Future<void> _checkSuspension() async {
+    final api = backend;
+    final id = api?.uid;
+    if (api == null || id == null || !signedIn) return;
+    try {
+      final until = moderation.bannedUntil;
+      if (moderation.status == 'banned' &&
+          until != null &&
+          until.isBefore(DateTime.now())) {
+        await api.accounts.refreshStanding();
       }
-    });
+      final user = await api.users.fetch(id);
+      if (user != null && user.suspended != _suspendedFlag) {
+        update(() => _suspendedFlag = user.suspended);
+      }
+    } catch (_) {
+      // Non-critical; the next tick tries again.
+    }
   }
 
   /// Stops the suspension check timer.
   void _stopSuspensionCheck() {
     _suspensionCheckTimer?.cancel();
     _suspensionCheckTimer = null;
+    _moderationSub?.cancel();
+    _moderationSub = null;
+    moderation = const ModerationDoc();
+    _suspendedFlag = false;
+  }
+
+  /// "I understand" on the warning card.
+  Future<void> acknowledgeWarning() async {
+    final api = backend;
+    final id = api?.uid;
+    // Hide it straight away; the server stamp follows.
+    update(() => moderation = ModerationDoc(
+          status: moderation.status,
+          strikeTimes: moderation.strikeTimes,
+          lastReasons: moderation.lastReasons,
+          bannedUntil: moderation.bannedUntil,
+          noticeAt: moderation.noticeAt,
+          warningSeenAt: DateTime.now(),
+          appealPendingAt: moderation.appealPendingAt,
+        ));
+    if (api == null || id == null) return;
+    try {
+      await api.moderation.markWarningSeen(id);
+    } catch (_) {}
+  }
+
+  /// Sends an appeal against the current notice. False if it didn't go.
+  Future<bool> submitAppeal(String text) async {
+    final api = backend;
+    final id = api?.uid;
+    final trimmed = text.trim();
+    if (api == null || id == null || trimmed.isEmpty) return false;
+    try {
+      await api.moderation
+          .appeal(id, trimmed.length > 600 ? trimmed.substring(0, 600) : trimmed);
+      showToast(t['appealSent']);
+      return true;
+    } catch (_) {
+      showToast(t['appealFailed']);
+      return false;
+    }
+  }
+
+  /// "Check again" on the pause screen: ends a ban whose time is up.
+  Future<void> checkStandingAgain() async {
+    final api = backend;
+    if (api == null) return;
+    try {
+      final lifted = await api.accounts.refreshStanding();
+      if (lifted) {
+        update(() => _suspendedFlag = false);
+        showToast(t['banLifted']);
+      } else {
+        showToast(t['banStillActive']);
+      }
+    } catch (_) {
+      showToast(t['banStillActive']);
+    }
   }
 
   /// Retries a Future with exponential backoff (max 3 attempts)
@@ -2196,12 +2281,48 @@ class AppState extends ChangeNotifier {
       kContractors.firstWhere((c) => c.id == selectedContractorId,
           orElse: () => kContractors.first);
 
-  void viewWorker(String id, Screen back, {Worker? worker}) => update(() {
-        selectedWorkerId = id;
-        _selectedFeedWorker = worker;
-        workerDetailBack = back;
-        screen = Screen.contractorWorkerDetail;
-      });
+  /// [worker] is what the tapped card already knows. With [loadProfile] it
+  /// is only a stand-in (an applicant row has a name and skill but no photo,
+  /// rating or location) and is replaced by the worker's real profile once
+  /// it arrives — without a stand-in the demo list's first worker showed.
+  void viewWorker(String id, Screen back,
+      {Worker? worker, bool loadProfile = false}) {
+    update(() {
+      selectedWorkerId = id;
+      _selectedFeedWorker = worker;
+      workerDetailBack = back;
+      screen = Screen.contractorWorkerDetail;
+    });
+    if (loadProfile) _loadSelectedWorker(id);
+  }
+
+  Future<void> _loadSelectedWorker(String id) async {
+    final api = backend;
+    if (api == null) return;
+    try {
+      final doc = await api.users.fetch(id);
+      if (doc == null || selectedWorkerId != id) return;
+      _publicProfiles[id] = Future.value(doc);
+      update(() => _selectedFeedWorker = doc.toWorker());
+    } catch (_) {
+      // Keep the stand-in; the screen still works without the extra detail.
+    }
+  }
+
+  final Map<String, Future<UserDoc?>> _publicProfiles = {};
+
+  /// Another user's public profile, fetched once per session — for showing
+  /// their photo where the screen only has their id (applicants, job
+  /// posters, chat). Null offline or when there is no such profile.
+  Future<UserDoc?> publicProfile(String uid) {
+    final api = backend;
+    if (api == null || uid.isEmpty) return Future.value(null);
+    return _publicProfiles[uid] ??=
+        api.users.fetch(uid).then<UserDoc?>((d) => d, onError: (_) {
+      _publicProfiles.remove(uid);
+      return null;
+    });
+  }
 
   void viewContractor(String id, {Contractor? contractor}) => update(() {
         selectedContractorId = id;
@@ -2286,7 +2407,8 @@ class AppState extends ChangeNotifier {
           aboutUserId: aboutUserId,
           jobId: jobId,
           reasons: reasons,
-          note: note,
+          // firestore.rules caps the note; a longer one would be refused.
+          note: note.length > 500 ? note.substring(0, 500) : note,
         ));
       } catch (_) {
         // Still tell the user it was received — see method doc.

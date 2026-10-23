@@ -53,6 +53,14 @@ service cloud.firestore {
     // same value *and presence* before and after. unchanged() passes when the
     // field is absent from the resulting document, which lets an update
     // delete it (e.g. removing jobId to dodge the rejected-application check).
+    // A paused (temporarily banned) or suspended account can still read, but
+    // cannot apply, open chats, message or review — the ban is enforced here,
+    // not only by the app's pause screen.
+    function notSuspended() {
+      let me = /databases/$(database)/documents/users/$(request.auth.uid);
+      return !exists(me) || get(me).data.get('suspended', false) != true;
+    }
+
     function fieldKept(field) {
       return request.resource.data.get(field, null) == resource.data.get(field, null);
     }
@@ -176,6 +184,14 @@ service cloud.firestore {
           && request.resource.data.termsAcceptedAt == request.time;
       }
 
+      // Their own warning / pause notice, written by onReport. The owner may
+      // only stamp that they have read it.
+      match /private/moderation {
+        allow update: if isSelf(uid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['warningSeenAt'])
+          && request.resource.data.warningSeenAt == request.time;
+      }
+
       match /tokens/{token} {
         allow read, write: if isSelf(uid);
       }
@@ -219,6 +235,10 @@ service cloud.firestore {
         && fieldKept('belowMinimumWage')
         && fieldKept('skill')
         && fieldKept('state')
+        // A job closed by onReport (fraud reports, or its poster suspended)
+        // stays closed: the poster can neither clear the hold nor reopen it.
+        && fieldKept('moderationHold')
+        && (resource.data.get('moderationHold', null) == null || fieldKept('status'))
         // No new/changed phone on the public job (a legacy value may stay until
         // it is migrated, or be removed, but not be set or edited).
         && (request.resource.data.get('contractorPhone', '') == ''
@@ -235,6 +255,7 @@ service cloud.firestore {
 
       // The id is jobId_workerId, which makes a second application impossible.
       allow create: if signedIn()
+        && notSuspended()
         && request.resource.data.workerId == request.auth.uid
         && applicationId == request.resource.data.jobId + '_' + request.auth.uid
         && request.resource.data.status == 'pending'
@@ -261,6 +282,7 @@ service cloud.firestore {
       // still live, and only with that job's actual poster. A direct thread
       // follows canOpenDirectThread.
       allow create: if signedIn()
+        && notSuspended()
         && request.resource.data.participants is list
         && request.resource.data.participants.size() == 2
         && ((request.resource.data.jobId is string
@@ -281,6 +303,7 @@ service cloud.firestore {
           && request.auth.uid in get(/databases/$(database)/documents/threads/$(threadId)).data.participants;
 
         allow create: if signedIn()
+          && notSuspended()
           && request.resource.data.senderId == request.auth.uid
           && isPlainText(request.resource.data.text, 2000)
           && request.resource.data.text.size() > 0
@@ -307,6 +330,7 @@ service cloud.firestore {
       allow read: if signedIn();
       // Ratings are recomputed by a function; a review cannot be edited later.
       allow create: if signedIn()
+        && notSuspended()
         && request.resource.data.byUserId == request.auth.uid
         && request.resource.data.aboutUserId != request.auth.uid
         && request.resource.data.rating is int
@@ -334,10 +358,39 @@ service cloud.firestore {
 
     match /reports/{reportId} {
       // Abuse reports: write-only from clients, read by moderators via console.
+      // byRole/aboutRole are stamped by the onReport function from the users'
+      // own profiles, so a client cannot send them (or any other field).
       allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(
+             ['byUserId', 'aboutUserId', 'jobId', 'reasons', 'note', 'createdAt'])
         && request.resource.data.byUserId == request.auth.uid
+        && request.resource.data.get('aboutUserId', '') != request.auth.uid
         && request.resource.data.reasons is list
-        && request.resource.data.reasons.size() > 0;
+        && request.resource.data.reasons.size() > 0
+        && request.resource.data.reasons.size() <= 12
+        && request.resource.data.get('note', '') is string
+        && request.resource.data.get('note', '').size() <= 2000;
+      allow read, update, delete: if false;
+    }
+
+    // Who reported whom, per reported user. Cloud Functions only.
+    match /moderationLedger/{uid} {
+      allow read, write: if false;
+    }
+
+    // An appeal against a warning, pause or suspension: one at a time (the
+    // onAppeal function marks the notice as under review until a moderator
+    // clears it), and only by someone who actually has a notice.
+    match /appeals/{appealId} {
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['byUserId', 'text', 'createdAt'])
+        && request.resource.data.byUserId == request.auth.uid
+        && isPlainText(request.resource.data.text, 2000)
+        && request.resource.data.text.size() > 0
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid)/private/moderation)
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)/private/moderation).data.get('status', 'clear')
+             in ['warned', 'banned', 'suspended']
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)/private/moderation).data.get('appealPendingAt', null) == null;
       allow read, update, delete: if false;
     }
 

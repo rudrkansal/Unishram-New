@@ -70,6 +70,7 @@ extension UserDocView on UserDoc {
         expectedWage,
         '', // other users' phones are private — never shown from a public profile
         available: availability == 'available',
+        photoUrl: photoUrl,
       );
 
   Contractor toContractor() => Contractor(
@@ -81,6 +82,7 @@ extension UserDocView on UserDoc {
             ? 'New'
             : '$ratingCount ${ratingCount == 1 ? 'review' : 'reviews'}',
         '', // other users' phones are private — never shown from a public profile
+        photoUrl: photoUrl,
       );
 
   String _experience() {

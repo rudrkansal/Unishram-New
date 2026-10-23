@@ -12,6 +12,7 @@ import '../../widgets/direct_threads_section.dart';
 import '../../widgets/feed_builder.dart';
 import '../../widgets/profile_contact_actions.dart';
 import '../../widgets/rate_dialog.dart';
+import '../../widgets/user_avatar.dart';
 import '../../widgets/report_block_sheet.dart';
 import '../../widgets/search_tier_bar.dart';
 import '../../widgets/unread_dot.dart';
@@ -182,7 +183,10 @@ class ContractorApplicants extends StatelessWidget {
                       };
                       return GestureDetector(
                         onTap: () => context.app.viewWorker(
-                            w.workerId, Screen.contractorApplicants),
+                            w.workerId, Screen.contractorApplicants,
+                            worker: Worker(w.workerId, w.workerName,
+                                w.workerSkill, '—', '', 0, w.expectedWage, ''),
+                            loadProfile: true),
                         child: SurfaceCard(
                           padding: const EdgeInsets.all(14),
                           child: Column(
@@ -190,7 +194,7 @@ class ContractorApplicants extends StatelessWidget {
                               Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Avatar(initialsOf(w.workerName)),
+                                  UserAvatar(uid: w.workerId, name: w.workerName),
                                   const SizedBox(width: 12),
                                   Expanded(
                                     child: Column(
@@ -784,7 +788,8 @@ class ContractorFind extends StatelessWidget {
                                 worker: w),
                             child: Row(
                               children: [
-                                Avatar(initialsOf(w.name)),
+                                Avatar(initialsOf(w.name),
+                                    imagePath: w.photoUrl),
                                 const SizedBox(width: 12),
                                 Expanded(
                                   child: Column(
@@ -863,7 +868,7 @@ class WorkerDetail extends StatelessWidget {
       children: [
         Column(
           children: [
-            Avatar(initialsOf(w.name), size: 76),
+            ProfilePhotoAvatar(name: w.name, photoUrl: w.photoUrl),
             const SizedBox(height: 10),
             Text(w.name,
                 style: const TextStyle(
@@ -923,6 +928,10 @@ class WorkerDetail extends StatelessWidget {
               aboutName: w.name,
             ),
           ),
+          if (app.uid != null) ...[
+            const SizedBox(height: 12),
+            ReportUserButton(userId: w.id, aboutEmployer: false),
+          ],
         ],
       ],
     );

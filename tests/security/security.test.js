@@ -6,7 +6,7 @@ const assert = require("node:assert/strict");
 const {initializeApp} = require("firebase/app");
 const {getAuth, connectAuthEmulator, createUserWithEmailAndPassword} = require("firebase/auth");
 const {getFirestore, connectFirestoreEmulator, doc, setDoc, getDoc, getDocs, updateDoc, deleteDoc, collection,
-  deleteField, serverTimestamp, Timestamp} = require("firebase/firestore");
+  deleteField, serverTimestamp, Timestamp, addDoc} = require("firebase/firestore");
 const {getFunctions, connectFunctionsEmulator, httpsCallable} = require("firebase/functions");
 const admin = require("firebase-admin");
 const {execFileSync} = require("node:child_process");
@@ -1136,5 +1136,144 @@ describe("postJob minimum wage by occupation (Gardener + existing categories)", 
     const j = (await ref.get()).data();
     assert.equal(j.minWageAtPost, 519);
     assert.equal(j.belowMinimumWage, false);
+  });
+});
+
+describe("Reports & two-strike moderation: warning -> 7-day pause -> suspension", () => {
+  const rc = {};
+  const adb = () => admin.firestore();
+  const report = (c, extra = {}) => addDoc(collection(c.db, "reports"),
+      {byUserId: c.uid, reasons: ["wage_not_paid"], note: "", createdAt: serverTimestamp(), ...extra});
+  const strikeOf = async (ref) => {
+    let v;
+    await waitFor(async () => (v = (await adb().doc(ref.path).get()).get("strike")) !== undefined, 20000);
+    return v;
+  };
+  const view = async (uid) => (await adb().doc(`users/${uid}/private/moderation`).get()).data() || {};
+  let bossJob;
+
+  before(async () => {
+    for (const n of ["rpBoss", "rpBoss2", "rpW1", "rpW2", "rpW3", "rpW4"]) {
+      rc[n] = await makeClient(n);
+      await setDoc(doc(rc[n].db, "users", rc[n].uid), {
+        role: n.startsWith("rpBoss") ? "contractor" : "labourer", fullName: `Test ${n}`,
+      });
+    }
+    // W1-W3 applied to the boss's job (they have dealt with him); W4 never did.
+    bossJob = `boss-${run}`;
+    await seedJob(bossJob, rc.rpBoss.uid);
+    for (const n of ["rpW1", "rpW2", "rpW3"]) {
+      await setDoc(doc(rc[n].db, "applications", `${bossJob}_${rc[n].uid}`),
+          {jobId: bossJob, workerId: rc[n].uid, contractorId: rc.rpBoss.uid, status: "pending"});
+    }
+  });
+
+  test("R1. rules: a valid report is accepted; spoofed reporter, self-report, extra fields, empty/oversized payloads are denied", async () => {
+    const {rpW1: w, rpBoss2: boss} = rc;
+    await expectOk(report(w, {aboutUserId: boss.uid, note: "did not pay"}));
+    await expectDenied(report(w, {byUserId: boss.uid, aboutUserId: boss.uid}));
+    await expectDenied(report(w, {aboutUserId: w.uid}));
+    await expectDenied(report(w, {aboutUserId: boss.uid, aboutRole: "labourer"}));
+    await expectDenied(report(w, {aboutUserId: boss.uid, reasons: []}));
+    await expectDenied(report(w, {aboutUserId: boss.uid, reasons: Array(13).fill("other")}));
+    await expectDenied(report(w, {aboutUserId: boss.uid, note: "x".repeat(2001)}));
+    await expectDenied(report(clients.anon, {byUserId: "anon", aboutUserId: boss.uid}));
+    await expectDenied(getDocs(collection(w.db, "reports")));
+  });
+
+  test("R2. roles are stamped from profiles; a report from someone with no application/chat gives no strike", async () => {
+    const ref = await report(rc.rpW4, {aboutUserId: rc.rpBoss.uid, reasons: ["paid_less"]});
+    assert.equal(await strikeOf(ref), "no_connection");
+    const r = (await adb().doc(ref.path).get()).data();
+    assert.equal(r.byRole, "labourer");
+    assert.equal(r.aboutRole, "contractor");
+    assert.equal((await view(rc.rpBoss.uid)).status, undefined, "no notice from a stranger's report");
+  });
+
+  test("R3. two different workers reporting a job as fake close it under a hold the poster cannot lift", async () => {
+    const {rpBoss2: boss, rpW1, rpW2} = rc;
+    const jid = `fraud-${run}`;
+    await seedJob(jid, boss.uid);
+    await report(rpW1, {aboutUserId: boss.uid, jobId: jid, reasons: ["fake_job"]});
+    await report(rpW1, {aboutUserId: boss.uid, jobId: jid, reasons: ["asked_money"]}); // same person again: not enough
+    await new Promise((r) => setTimeout(r, 2500));
+    assert.equal((await adb().doc(`jobs/${jid}`).get()).get("status"), "open");
+    await report(rpW2, {aboutUserId: boss.uid, jobId: jid, reasons: ["asked_money"]});
+    assert.ok(await waitFor(async () => (await adb().doc(`jobs/${jid}`).get()).get("status") === "closed", 20000));
+    assert.equal((await adb().doc(`jobs/${jid}`).get()).get("moderationHold"), "reported_fraud");
+    await expectDenied(updateDoc(doc(boss.db, "jobs", jid), {status: "open"}));
+    await expectDenied(updateDoc(doc(boss.db, "jobs", jid), {moderationHold: deleteField()}));
+    await expectOk(updateDoc(doc(boss.db, "jobs", jid), {description: "edited"}));
+  });
+
+  test("R4. strike 1 = warning: notice without reporter ids, account still works; repeats by the same worker don't count", async () => {
+    const {rpBoss: boss, rpW1} = rc;
+    const ref = await report(rpW1, {aboutUserId: boss.uid, reasons: ["wage_not_paid", "harassment"]});
+    assert.equal(await strikeOf(ref), "warned");
+    const v = await view(boss.uid);
+    assert.equal(v.status, "warned");
+    assert.equal(v.strikeTimes.length, 1);
+    assert.deepEqual(v.lastReasons, ["wage_not_paid", "harassment"]);
+    assert.equal(JSON.stringify(v).includes(rpW1.uid), false, "the notice must not reveal the reporter");
+    assert.notEqual((await adb().doc(`users/${boss.uid}`).get()).get("suspended"), true);
+    // Owner reads their notice and may only stamp it as seen; nobody reads the ledger.
+    await expectOk(getDoc(doc(boss.db, "users", boss.uid, "private", "moderation")));
+    await expectDenied(getDoc(doc(rpW1.db, "users", boss.uid, "private", "moderation")));
+    await expectDenied(getDoc(doc(boss.db, "moderationLedger", boss.uid)));
+    await expectDenied(updateDoc(doc(boss.db, "users", boss.uid, "private", "moderation"), {status: "clear"}));
+    await expectOk(updateDoc(doc(boss.db, "users", boss.uid, "private", "moderation"), {warningSeenAt: serverTimestamp()}));
+    const again = await report(rpW1, {aboutUserId: boss.uid, reasons: ["paid_less"]});
+    assert.equal(await strikeOf(again), "repeat_reporter");
+    assert.equal((await view(boss.uid)).strikeTimes.length, 1);
+  });
+
+  test("R5. strike 2 from a different worker = 7-day pause: suspended, open jobs closed, rules block applying/reviewing; one appeal at a time", async () => {
+    const {rpBoss: boss, rpW2, rpW4} = rc;
+    const ref = await report(rpW2, {aboutUserId: boss.uid, reasons: ["asked_money"]});
+    assert.equal(await strikeOf(ref), "banned");
+    const v = await view(boss.uid);
+    assert.equal(v.status, "banned");
+    const days = (v.bannedUntil.toMillis() - Date.now()) / 86400000;
+    assert.ok(days > 6.9 && days <= 7, `ban should last 7 days, got ${days}`);
+    assert.equal((await adb().doc(`users/${boss.uid}`).get()).get("suspended"), true);
+    assert.ok(await waitFor(async () => (await adb().doc(`jobs/${bossJob}`).get()).get("moderationHold") === "poster_banned", 20000));
+    assert.equal((await adb().doc(`jobs/${bossJob}`).get()).get("status"), "closed");
+    // Enforced by the rules, not only the pause screen.
+    const other = `other-${run}`;
+    await seedJob(other, rc.rpBoss2.uid);
+    await expectDenied(setDoc(doc(boss.db, "applications", `${other}_${boss.uid}`),
+        {jobId: other, workerId: boss.uid, contractorId: rc.rpBoss2.uid, status: "pending"}));
+    await expectDenied(setDoc(doc(boss.db, "reviews", `rv-${run}`),
+        {byUserId: boss.uid, aboutUserId: rpW2.uid, rating: 1, jobId: bossJob}));
+    // Appeals: only someone with a notice, and only one pending at a time.
+    await expectDenied(addDoc(collection(rpW4.db, "appeals"), {byUserId: rpW4.uid, text: "x", createdAt: serverTimestamp()}));
+    await expectDenied(addDoc(collection(boss.db, "appeals"), {byUserId: boss.uid, text: "", createdAt: serverTimestamp()}));
+    await expectOk(addDoc(collection(boss.db, "appeals"), {byUserId: boss.uid, text: "I paid them in cash", createdAt: serverTimestamp()}));
+    assert.ok(await waitFor(async () => (await view(boss.uid)).appealPendingAt !== undefined, 20000));
+    await expectDenied(addDoc(collection(boss.db, "appeals"), {byUserId: boss.uid, text: "again", createdAt: serverTimestamp()}));
+  });
+
+  test("R6. refreshMyStanding keeps an unexpired pause, lifts an expired one and reopens the poster's held jobs", async () => {
+    const {rpBoss: boss} = rc;
+    const refresh = async () => (await httpsCallable(boss.functions, "refreshMyStanding")()).data;
+    assert.equal((await refresh()).lifted, false);
+    const past = admin.firestore.Timestamp.fromMillis(Date.now() - 1000);
+    await adb().doc(`moderationLedger/${boss.uid}`).set({bannedUntil: past}, {merge: true});
+    assert.deepEqual(await refresh(), {lifted: true, status: "warned"});
+    assert.equal((await adb().doc(`users/${boss.uid}`).get()).get("suspended"), false);
+    assert.equal((await view(boss.uid)).status, "warned");
+    assert.equal((await adb().doc(`jobs/${bossJob}`).get()).get("moderationHold"), undefined);
+  });
+
+  test("R7. strike 3 after a pause = suspension until a moderator reviews it; refreshMyStanding cannot lift it", async () => {
+    const {rpBoss: boss, rpW3} = rc;
+    const ref = await report(rpW3, {aboutUserId: boss.uid, reasons: ["forced_work"]});
+    assert.equal(await strikeOf(ref), "suspended");
+    const v = await view(boss.uid);
+    assert.equal(v.status, "suspended");
+    assert.equal(v.bannedUntil, null);
+    assert.equal(v.strikeTimes.length, 3);
+    assert.equal((await adb().doc(`users/${boss.uid}`).get()).get("suspended"), true);
+    assert.equal((await httpsCallable(boss.functions, "refreshMyStanding")()).data.lifted, false);
   });
 });

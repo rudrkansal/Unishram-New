@@ -16,6 +16,7 @@ import 'screens/terms_screens.dart';
 import 'state/app_state.dart';
 import 'theme.dart';
 import 'widgets/app_shell.dart';
+import 'widgets/moderation_gate.dart';
 import 'widgets/rating_prompt_gate.dart';
 import 'widgets/update_prompt_gate.dart';
 
@@ -60,6 +61,9 @@ class AppRoot extends StatelessWidget {
                     if (showChrome) const AppBottomNav(),
                   ],
                 ),
+                // Under the toast, so "still paused" etc. shows on the
+                // pause screen.
+                const ModerationOverlay(),
                 const ToastBanner(),
                 const ContactSheet(),
               ],

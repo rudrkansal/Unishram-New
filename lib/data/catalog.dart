@@ -1381,9 +1381,12 @@ class Worker {
   final int wage;
   final String phone;
   final bool available;
+
+  /// Their uploaded profile photo's download URL; empty shows initials.
+  final String photoUrl;
   const Worker(this.id, this.name, this.skill, this.experience, this.location,
       this.rating, this.wage, this.phone,
-      {this.available = true});
+      {this.available = true, this.photoUrl = ''});
 }
 
 const List<Worker> kWorkers = [
@@ -1411,8 +1414,12 @@ class Contractor {
   final double rating;
   final String projects;
   final String phone;
+
+  /// Their uploaded profile photo's download URL; empty shows initials.
+  final String photoUrl;
   const Contractor(this.id, this.name, this.location, this.rating,
-      this.projects, this.phone);
+      this.projects, this.phone,
+      {this.photoUrl = ''});
 }
 
 const List<Contractor> kContractors = [

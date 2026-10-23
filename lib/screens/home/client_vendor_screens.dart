@@ -9,6 +9,7 @@ import '../../widgets/account_actions.dart';
 import '../../widgets/feed_builder.dart';
 import '../../widgets/direct_threads_section.dart';
 import '../../widgets/profile_contact_actions.dart';
+import '../../widgets/user_avatar.dart';
 import '../../widgets/report_block_sheet.dart';
 import '../../widgets/search_tier_bar.dart';
 import '../coming_soon_screen.dart';
@@ -73,7 +74,8 @@ class ClientSearch extends StatelessWidget {
                             context.app.viewContractor(c.id, contractor: c),
                         child: Row(
                           children: [
-                            Avatar(initialsOf(c.name)),
+                            Avatar(initialsOf(c.name),
+                                imagePath: c.photoUrl),
                             const SizedBox(width: 12),
                             Expanded(
                               child: Column(
@@ -124,7 +126,7 @@ class ClientContractorDetail extends StatelessWidget {
       children: [
         Column(
           children: [
-            Avatar(initialsOf(c.name), size: 76),
+            ProfilePhotoAvatar(name: c.name, photoUrl: c.photoUrl),
             const SizedBox(height: 10),
             Text(c.name,
                 style: const TextStyle(
@@ -139,7 +141,7 @@ class ClientContractorDetail extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 24),
-        if (c.id != app.uid)
+        if (c.id != app.uid) ...[
           ProfileContactActions(
             app: app,
             peerId: c.id,
@@ -147,6 +149,11 @@ class ClientContractorDetail extends StatelessWidget {
             back: Screen.clientContractorDetail,
             fallbackPhone: c.phone,
           ),
+          if (app.uid != null) ...[
+            const SizedBox(height: 12),
+            ReportUserButton(userId: c.id, aboutEmployer: false),
+          ],
+        ],
       ],
     );
   }
@@ -462,7 +469,8 @@ class _ChatThreadState extends State<ChatThread> {
           ),
           child: Row(
             children: [
-              Avatar(initialsOf(app.chatWithName), size: 38),
+              UserAvatar(
+                  uid: app.chatPeerId ?? '', name: app.chatWithName, size: 38),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
