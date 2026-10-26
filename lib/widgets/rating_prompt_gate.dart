@@ -46,10 +46,15 @@ class _RatingPromptGateState extends State<RatingPromptGate> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       final app = context.app;
+      // Never on top of a warning card or the pause screen: someone who
+      // was just reported shouldn't be asked to rate anyone. The next home
+      // visit tries again.
+      if (app.signedIn) await app.moderationReady();
+      if (!mounted || app.moderationNoticeShowing) return;
       final candidate = await app.maybeGetForcedRatingCandidate();
       // Never stack on top of the update dialog; the next home visit retries.
       if (AppUpdateService.instance.promptOpen) return;
-      if (candidate != null && mounted) {
+      if (candidate != null && mounted && !app.moderationNoticeShowing) {
         await showForcedRateDialog(
           context,
           aboutUserId: candidate.aboutUserId,
@@ -60,6 +65,7 @@ class _RatingPromptGateState extends State<RatingPromptGate> {
       }
       if (!mounted || !(await app.shouldShowAppRatePrompt())) return;
       if (!mounted || AppUpdateService.instance.promptOpen) return;
+      if (app.moderationNoticeShowing) return;
       await showRateAppDialog(context);
       // Covers every dismissal path (Cancel, tap-outside, back button) —
       // submitting also sets this itself, so this is a harmless no-op then.

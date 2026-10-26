@@ -1276,4 +1276,24 @@ describe("Reports & two-strike moderation: warning -> 7-day pause -> suspension"
     assert.equal((await adb().doc(`users/${boss.uid}`).get()).get("suspended"), true);
     assert.equal((await httpsCallable(boss.functions, "refreshMyStanding")()).data.lifted, false);
   });
+
+  test("R8. clients: a report counts once the client has messaged the person (direct chat); without contact it doesn't", async () => {
+    const mk = async (n, role) => {
+      const c = await makeClient(n);
+      await setDoc(doc(c.db, "users", c.uid), {role, fullName: `Test ${n}`});
+      return c;
+    };
+    const client = await mk("rpClient", "client");
+    const stranger = await mk("rpClient2", "client");
+    const contractor = await mk("rpCtr", "contractor");
+    const [lo, hi] = [client.uid, contractor.uid].sort();
+    await expectOk(setDoc(doc(client.db, "threads", `direct_${lo}_${hi}`),
+        {participants: [lo, hi], names: {}, jobId: null, kind: "direct"}));
+    const counted = await report(client, {aboutUserId: contractor.uid, reasons: ["scam", "payment_issue"]});
+    assert.equal(await strikeOf(counted), "warned");
+    assert.equal((await adb().doc(counted.path).get()).get("byRole"), "client");
+    const ignored = await report(stranger, {aboutUserId: contractor.uid, reasons: ["scam"]});
+    assert.equal(await strikeOf(ignored), "no_connection");
+    assert.equal((await view(contractor.uid)).strikeTimes.length, 1);
+  });
 });

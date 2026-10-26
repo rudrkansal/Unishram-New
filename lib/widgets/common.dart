@@ -9,13 +9,24 @@ import 'package:url_launcher/url_launcher.dart';
 import '../data/strings.dart';
 import '../theme.dart';
 
-/// Places a real dial to an Indian mobile number. Shared by every "Call"
-/// action so the sheet, applicants list, etc. dial the same way.
+/// Opens the phone's dialer with [number] filled in; the person still taps
+/// the call button, nothing is dialled automatically. Every call action in
+/// the app (contacts and 112) goes through here, so they behave the same.
+/// False when the device has no phone app (some tablets) or refused.
+Future<bool> openDialer(String number) async {
+  try {
+    return await launchUrl(Uri(scheme: 'tel', path: number));
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Dials an Indian mobile number. Shared by every "Call" action so the
+/// sheet, applicants list, etc. dial the same way.
 Future<void> dialPhone(String phone) async {
   final digits = phone.replaceAll(RegExp(r'\D'), '');
   if (digits.isEmpty) return;
-  final uri = Uri.parse('tel:+91$digits');
-  if (await canLaunchUrl(uri)) await launchUrl(uri);
+  await openDialer('+91$digits');
 }
 
 /// Shows a bottom sheet offering "take a photo" / "choose from gallery",

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../app_scope.dart';
 import '../services/voice_command_service.dart';
@@ -452,12 +451,7 @@ class ContactSheet extends StatelessWidget {
     );
   }
 
-  Future<void> _dial(String phone) async {
-    final digits = phone.replaceAll(RegExp(r'\D'), '');
-    if (digits.isEmpty) return;
-    final uri = Uri.parse('tel:+91$digits');
-    if (await canLaunchUrl(uri)) await launchUrl(uri);
-  }
+  Future<void> _dial(String phone) => dialPhone(phone);
 }
 
 /// Shown while the microphone is open, so the user can see they were heard.

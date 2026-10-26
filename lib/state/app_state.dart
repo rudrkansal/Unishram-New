@@ -368,6 +368,28 @@ class CalcRow {
       CalcRow(j['skillId'], j['count'], j['wage'], j['days']);
 }
 
+/// Someone the user is working with or has worked with, through one job:
+/// what the Ratings tab (workers) and the profile (hirers) list, each with
+/// Rate and Report.
+class WorkedWith {
+  const WorkedWith({
+    required this.uid,
+    required this.name,
+    required this.job,
+    required this.status,
+    required this.current,
+  });
+  final String uid;
+  final String name;
+  final Job job;
+
+  /// The application's status: shortlisted or hired.
+  final String status;
+
+  /// The job is still running (open or filled, end date not passed).
+  final bool current;
+}
+
 class ContactTarget {
   final String name;
   final String subtitle;
@@ -446,6 +468,17 @@ class AppState extends ChangeNotifier {
 
   /// The signed-in user's own warning / pause notice (see ModerationDoc).
   ModerationDoc moderation = const ModerationDoc();
+  Completer<void> _moderationLoaded = Completer<void>();
+
+  /// Completes once the notice has loaded (or after [timeout]), so prompts
+  /// that open on their own can avoid covering a warning or the pause screen.
+  Future<void> moderationReady(
+          [Duration timeout = const Duration(seconds: 5)]) =>
+      _moderationLoaded.future.timeout(timeout, onTimeout: () {});
+
+  /// A warning card or the pause screen is (or is about to be) on screen.
+  bool get moderationNoticeShowing =>
+      accountLocked || (signedIn && moderation.warningUnread);
 
   /// users/{uid}.suspended — also set by a moderator by hand, with no notice.
   bool _suspendedFlag = false;
@@ -1935,7 +1968,10 @@ class AppState extends ChangeNotifier {
     if (api == null || id == null) return;
     _moderationSub?.cancel();
     _moderationSub = api.moderation.watch(id).listen(
-          (m) => update(() => moderation = m),
+          (m) {
+            update(() => moderation = m);
+            if (!_moderationLoaded.isCompleted) _moderationLoaded.complete();
+          },
           onError: (_) {}, // offline or not yet permitted: keep the last notice
         );
     _suspensionCheckTimer?.cancel();
@@ -1970,6 +2006,7 @@ class AppState extends ChangeNotifier {
     _moderationSub?.cancel();
     _moderationSub = null;
     moderation = const ModerationDoc();
+    _moderationLoaded = Completer<void>();
     _suspendedFlag = false;
   }
 
@@ -2819,6 +2856,90 @@ class AppState extends ChangeNotifier {
 
   /// Whether the signed-in user has already reviewed [aboutUserId] for
   /// [jobId] — used to swap the "Rate" button for a disabled "Rated" state.
+  /// A job still running: open or filled, and its end date not passed.
+  static bool isJobCurrent(Job job, [DateTime? now]) {
+    if (job.status != 'open' && job.status != 'filled') return false;
+    final end = job.endDate;
+    return end == null || !end.isBefore(now ?? DateTime.now());
+  }
+
+  /// Whether an application belongs on the worked-with list: anyone hired,
+  /// and anyone shortlisted while the job is still running.
+  static bool countsAsWorkedWith(String status, bool current) =>
+      status == 'hired' || (status == 'shortlisted' && current);
+
+  /// The people this user works or worked with, newest job first. A worker
+  /// sees the hirers of the jobs they were shortlisted or hired for; a
+  /// contractor or client sees the workers they shortlisted or hired. Each
+  /// has an application with the user, so a report from here always counts
+  /// as a strike (see onReport).
+  Future<List<WorkedWith>> workedWith() async {
+    const wait = Duration(seconds: 5);
+    final people = <WorkedWith>[];
+    if (role == Role.labourer) {
+      final apps = await myApplications().first.timeout(wait);
+      for (final a in apps) {
+        if (a.status != 'hired' && a.status != 'shortlisted') continue;
+        if (a.contractorId.isEmpty || isBlocked(a.contractorId)) continue;
+        Job? job;
+        try {
+          job = await jobStream(a.jobId).first.timeout(wait);
+        } catch (_) {}
+        if (job == null) continue;
+        final current = isJobCurrent(job);
+        if (!countsAsWorkedWith(a.status, current)) continue;
+        people.add(WorkedWith(
+            uid: a.contractorId,
+            name: job.contractor,
+            job: job,
+            status: a.status,
+            current: current));
+      }
+    } else {
+      // The server's list of their jobs, not this phone's saved copy — that
+      // is empty after a reinstall or on a new phone.
+      List<Job> jobs;
+      try {
+        jobs = await myPostedJobsFeed().first.timeout(wait);
+      } catch (_) {
+        jobs = myPostedJobs;
+      }
+      for (final job in jobs) {
+        List<ApplicationDoc> apps;
+        try {
+          apps = await applicationsForJob(job.id).first.timeout(wait);
+        } catch (_) {
+          continue;
+        }
+        final current = isJobCurrent(job);
+        for (final a in apps) {
+          if (!countsAsWorkedWith(a.status, current)) continue;
+          if (a.workerId.isEmpty || isBlocked(a.workerId)) continue;
+          people.add(WorkedWith(
+              uid: a.workerId,
+              name: a.workerName,
+              job: job,
+              status: a.status,
+              current: current));
+        }
+      }
+    }
+    people.sort((x, y) => (y.job.endDate ?? DateTime(9999))
+        .compareTo(x.job.endDate ?? DateTime(9999)));
+    return people;
+  }
+
+  /// People the user has a direct chat with (opened from Find). Clients
+  /// can't post jobs, so this is who they have dealt with; a direct chat is
+  /// also what makes their report count as a strike (see onReport).
+  Future<List<ThreadDoc>> messagedPeople() async {
+    if (uid == null) return const [];
+    final threads =
+        await directThreadsFeed().first.timeout(const Duration(seconds: 5));
+    return [...threads]..sort((a, b) => (b.lastMessageAt ?? DateTime(0))
+        .compareTo(a.lastMessageAt ?? DateTime(0)));
+  }
+
   Future<bool> hasReviewed(String aboutUserId, String jobId) async {
     final api = backend;
     final id = api?.uid;

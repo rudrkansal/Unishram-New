@@ -116,7 +116,11 @@ class _WarningCard extends StatelessWidget {
                   decoration: BoxDecoration(
                       color: C.dangerBg,
                       borderRadius: BorderRadius.circular(12)),
-                  child: Text(t['warningNextStep'],
+                  // After a pause the next strike is the third: suspension.
+                  child: Text(
+                      m.activeStrikes().length >= 2
+                          ? t['warningNextStepSuspend']
+                          : t['warningNextStep'],
                       style: const TextStyle(
                           fontSize: 13,
                           height: 1.35,

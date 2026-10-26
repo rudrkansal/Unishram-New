@@ -1,7 +1,7 @@
 name: labour_marketplace
 description: "UniShram — India's unified labour ecosystem."
 publish_to: 'none'
-version: 1.6.1+18
+version: 1.6.2+19
 
 environment:
   sdk: ^3.5.4

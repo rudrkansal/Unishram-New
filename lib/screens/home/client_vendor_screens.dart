@@ -10,6 +10,7 @@ import '../../widgets/feed_builder.dart';
 import '../../widgets/direct_threads_section.dart';
 import '../../widgets/profile_contact_actions.dart';
 import '../../widgets/user_avatar.dart';
+import '../../widgets/worked_with.dart';
 import '../../widgets/report_block_sheet.dart';
 import '../../widgets/search_tier_bar.dart';
 import '../coming_soon_screen.dart';
@@ -216,6 +217,10 @@ class ClientProfile extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         const Divider(color: C.border),
+        const SizedBox(height: 8),
+        // Workers they hired or shortlisted, with Rate and Report.
+        const SizedBox(height: 8),
+        const WorkedWithSection(),
         const SizedBox(height: 8),
         const AccountActions(),
       ],

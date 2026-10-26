@@ -13,6 +13,7 @@ import '../../widgets/feed_builder.dart';
 import '../../widgets/profile_contact_actions.dart';
 import '../../widgets/rate_dialog.dart';
 import '../../widgets/user_avatar.dart';
+import '../../widgets/worked_with.dart';
 import '../../widgets/report_block_sheet.dart';
 import '../../widgets/search_tier_bar.dart';
 import '../../widgets/unread_dot.dart';
@@ -1334,6 +1335,10 @@ class ContractorProfile extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         const Divider(color: C.border),
+        const SizedBox(height: 8),
+        // Workers they hired or shortlisted, with Rate and Report.
+        const SizedBox(height: 8),
+        const WorkedWithSection(),
         const SizedBox(height: 8),
         const AccountActions(),
       ],

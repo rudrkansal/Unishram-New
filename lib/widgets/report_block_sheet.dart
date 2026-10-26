@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../app_scope.dart';
 import '../state/app_state.dart';
@@ -284,7 +283,12 @@ class _ReportReasonSheetState extends State<_ReportReasonSheet> {
                   ),
                   const SizedBox(width: 8),
                   FilledButton.icon(
-                    onPressed: () => launchUrl(Uri.parse('tel:112')),
+                    // No +91: 112 is dialled as-is, like any emergency number.
+                    onPressed: () async {
+                      if (!await openDialer('112')) {
+                        app.showToast(t['callEmergencyFailed']);
+                      }
+                    },
                     style: FilledButton.styleFrom(backgroundColor: C.danger),
                     icon: const Icon(Icons.call, size: 17),
                     label: Text(t['callEmergency'],

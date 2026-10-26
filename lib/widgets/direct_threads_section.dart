@@ -5,6 +5,7 @@ import '../backend/models.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 import 'common.dart';
+import 'user_avatar.dart';
 
 /// "Messages": the user's direct (Find-started) conversations, so either side
 /// can get back into one and reply. Renders nothing until there is at least
@@ -82,7 +83,7 @@ class _ThreadTile extends StatelessWidget {
       onTap: () => context.app.resumeDirectThread(thread, back),
       child: Row(
         children: [
-          Avatar(initialsOf(name), size: 38),
+          UserAvatar(uid: peer, name: name, size: 38),
           const SizedBox(width: 12),
           Expanded(
             child: Column(

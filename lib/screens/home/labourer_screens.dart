@@ -13,6 +13,7 @@ import '../../widgets/account_actions.dart';
 import '../../widgets/feed_builder.dart';
 import '../../widgets/unread_dot.dart';
 import '../../widgets/user_avatar.dart';
+import '../../widgets/worked_with.dart';
 import '../../widgets/report_block_sheet.dart';
 import '../../widgets/search_tier_bar.dart';
 
@@ -718,19 +719,6 @@ class _ApplicationCard extends StatelessWidget {
                     ),
                   ],
                 ),
-                // Wage theft and "fee" scams surface after the worker has
-                // applied or worked, so every application keeps a way to
-                // report the hirer — not just the job page.
-                if (application.contractorId.isNotEmpty &&
-                    application.contractorId != app.uid)
-                  Align(
-                    alignment: AlignmentDirectional.centerStart,
-                    child: ReportUserButton(
-                        userId: application.contractorId,
-                        jobId: job.id,
-                        aboutEmployer: true,
-                        compact: true),
-                  ),
               ],
             ),
           );
@@ -965,37 +953,53 @@ class LabourerRatings extends StatelessWidget {
     final app = context.appWatch;
     final t = app.t;
 
-    return FeedBuilder<Review>(
+    // Not a FeedBuilder: the people sections show even with no reviews yet.
+    return StreamBuilder<List<Review>>(
       stream: app.reviewFeed(),
-      emptyText: t['noReviewsYet'],
-      builder: (context, reviews) {
-        final average =
-            reviews.fold<int>(0, (a, r) => a + r.rating) / reviews.length;
+      builder: (context, snapshot) {
+        final reviews = snapshot.data ?? const <Review>[];
+        final average = reviews.isEmpty
+            ? 0.0
+            : reviews.fold<int>(0, (a, r) => a + r.rating) / reviews.length;
         return ListView(
           padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
           children: [
-            Row(
-              children: [
-                Text(average.toStringAsFixed(1),
-                    style: const TextStyle(
-                        fontSize: 32,
-                        fontWeight: FontWeight.w700,
-                        color: C.text)),
-                const SizedBox(width: 14),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(_stars(average),
-                        style: const TextStyle(fontSize: 13, color: C.text)),
-                    const SizedBox(height: 2),
-                    Text('${reviews.length} ${t['ratings']}',
-                        style: const TextStyle(
-                            fontSize: 12, color: C.textSecondary)),
-                  ],
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
+            if (reviews.isEmpty)
+              Text(t['noReviewsYet'],
+                  style: const TextStyle(fontSize: 13, color: C.mutedSoft))
+            else
+              Row(
+                children: [
+                  Text(average.toStringAsFixed(1),
+                      style: const TextStyle(
+                          fontSize: 32,
+                          fontWeight: FontWeight.w700,
+                          color: C.text)),
+                  const SizedBox(width: 14),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_stars(average),
+                          style: const TextStyle(fontSize: 13, color: C.text)),
+                      const SizedBox(height: 2),
+                      Text('${reviews.length} ${t['ratings']}',
+                          style: const TextStyle(
+                              fontSize: 12, color: C.textSecondary)),
+                    ],
+                  ),
+                ],
+              ),
+            const SizedBox(height: 22),
+            const WorkedWithSection(),
+            if (reviews.isNotEmpty) ...[
+              const SizedBox(height: 22),
+              Text(t['ratings'],
+                  style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: C.text)),
+              const SizedBox(height: 8),
+            ],
             for (final r in reviews)
               Container(
                 margin: const EdgeInsets.only(bottom: 10),
